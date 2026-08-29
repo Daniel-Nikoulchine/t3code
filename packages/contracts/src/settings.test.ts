@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
+import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
@@ -46,6 +47,41 @@ describe("ClaudeSettings auto-compaction", () => {
     expect(
       decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300000" } } }),
     ).toBeDefined();
+  });
+});
+
+describe("Hermes provider settings", () => {
+  it("defaults the built-in Hermes CLI to disabled with an isolated optional home", () => {
+    expect(DEFAULT_SERVER_SETTINGS.providers.hermes).toEqual({
+      enabled: false,
+      binaryPath: "hermes",
+      homePath: "",
+      customModels: [],
+    });
+  });
+
+  it("uses the Hermes-configured model for interactive and metadata jobs", () => {
+    const hermes = ProviderDriverKind.make("hermes");
+    expect(DEFAULT_MODEL_BY_PROVIDER[hermes]).toBe("default");
+    expect(DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[hermes]).toBe("default");
+  });
+
+  it("decodes Hermes legacy patches without disturbing other providers", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          hermes: {
+            binaryPath: " /opt/bin/hermes ",
+            homePath: " ~/.hermes-work ",
+            customModels: ["openrouter:anthropic/claude-sonnet-4.6"],
+          },
+        },
+      }).providers?.hermes,
+    ).toEqual({
+      binaryPath: "/opt/bin/hermes",
+      homePath: "~/.hermes-work",
+      customModels: ["openrouter:anthropic/claude-sonnet-4.6"],
+    });
   });
 });
 
