@@ -28,6 +28,13 @@ Hermes reports its configured models directly to T3 Code. Custom entries must us
 identifier expected by Hermes, normally `provider:model`. The `default` entry keeps the model
 selected in Hermes.
 
+## Reasoning effort
+
+Models that support it show a **Reasoning** control beside the model picker, with levels from
+None to Ultra and Medium as the default. The choice is applied to the live session and
+re-applied after model switches. It needs a Hermes build that honors the `reasoning_effort`
+session option, which 0.20.0 and newer cover.
+
 ## Permissions and active turns
 
 T3 Code maps permission modes as follows:

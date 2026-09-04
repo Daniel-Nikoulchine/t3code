@@ -15,6 +15,7 @@
 - [Source control integrations](./user/source-control.md)
 - [Background service (Linux)](./user/background-service.md)
 - Providers: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [Hermes](./user/providers-hermes.md) · [OpenCode](./user/providers-opencode.md)
+- [Hermes fork notes](./user/fork.md)
 
 Mobile app: [apps/mobile/README.md](../apps/mobile/README.md)
 
