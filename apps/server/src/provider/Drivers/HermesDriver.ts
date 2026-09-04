@@ -34,6 +34,7 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 import { makeHermesContinuationGroupKey, makeHermesEnvironment } from "./HermesHome.ts";
+import { probeHermesSkills } from "./HermesSkills.ts";
 const decodeHermesSettings = Schema.decodeSync(HermesSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("hermes");
@@ -88,6 +89,8 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
@@ -157,6 +160,23 @@ export const HermesDriver: ProviderDriver<HermesSettings, HermesDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
+        snapshotForCwd: (_cwd) =>
+          !effectiveConfig.enabled
+            ? snapshot.getSnapshot
+            : Effect.all([snapshot.getSnapshot, probeHermesSkills(processEnv)]).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderDriverError({
+                      driver: DRIVER_KIND,
+                      instanceId,
+                      detail: `Failed to discover Hermes skills for '${_cwd}'`,
+                      cause,
+                    }),
+                ),
+                Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
+              ),
         adapter,
         textGeneration,
       } satisfies ProviderInstance;

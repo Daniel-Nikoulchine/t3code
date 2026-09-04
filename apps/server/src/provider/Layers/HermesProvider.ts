@@ -45,8 +45,50 @@ const HERMES_PRESENTATION = {
   showInteractionModeToggle: false,
   requiresNewThreadForModelChange: false,
 } as const;
-const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
-  optionDescriptors: [],
+// The Reasoning picker needs a Hermes that honors `session/set_config_option`
+// for `reasoning_effort` (applied to the live session agent, re-applied after
+// model switches). Older Hermes builds accept the call but drop the value,
+// so keep MINIMUM_HERMES_VERSION aligned with the first release carrying it.
+const HERMES_REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max",
+  ultra: "Ultra",
+};
+
+function hermesReasoningEffortLabel(effort: string): string {
+  return HERMES_REASONING_EFFORT_LABELS[effort] ?? effort;
+}
+
+const HERMES_REASONING_EFFORTS: ReadonlyArray<string> = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+];
+
+const HERMES_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning",
+      type: "select",
+      options: HERMES_REASONING_EFFORTS.map((effort) =>
+        effort === "medium"
+          ? { id: effort, label: hermesReasoningEffortLabel(effort), isDefault: true }
+          : { id: effort, label: hermesReasoningEffortLabel(effort) },
+      ),
+      currentValue: "medium",
+    },
+  ],
 });
 
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
@@ -62,7 +104,7 @@ const HERMES_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
     name: "Hermes Default",
     isCustom: false,
     isDefault: true,
-    capabilities: EMPTY_CAPABILITIES,
+    capabilities: HERMES_MODEL_CAPABILITIES,
   },
 ];
 
@@ -114,7 +156,7 @@ export function hermesModelsFromSettings(
   customModels: ReadonlyArray<string> | undefined,
   builtInModels: ReadonlyArray<ServerProviderModel> = HERMES_BUILT_IN_MODELS,
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(builtInModels, customModels ?? [], EMPTY_CAPABILITIES);
+  return providerModelsFromSettings(builtInModels, customModels ?? [], HERMES_MODEL_CAPABILITIES);
 }
 
 export function buildHermesDiscoveredModelsFromSessionModelState(
@@ -156,10 +198,14 @@ export function buildHermesDiscoveredModelsFromSessionModelState(
       let name = (separatorIndex > 0 ? trimmedName.slice(separatorIndex + 3) : trimmedName).trim();
       if (!subProvider && slug.startsWith("custom:")) {
         const customBody = slug.slice("custom:".length);
-        const providerSlug = customBody.slice(0, customBody.indexOf(":"));
-        if (providerSlug) {
+        const providerEnd = customBody.indexOf(":");
+        // Malformed single-segment aliases (`custom:lonely`) carry no
+        // provider segment; `indexOf` returns -1 and `slice(0, -1)` would
+        // silently drop the last character into a garbage subProvider.
+        if (providerEnd > 0) {
+          const providerSlug = customBody.slice(0, providerEnd);
           subProvider = labelByProviderSlug.get(providerSlug) ?? providerSlug;
-          name = name || customBody.slice(providerSlug.length + 1);
+          if (!name) name = customBody.slice(providerEnd + 1);
         }
       }
       return {
@@ -168,15 +214,48 @@ export function buildHermesDiscoveredModelsFromSessionModelState(
         isCustom: false,
         ...(subProvider ? { subProvider } : {}),
         ...(model.modelId === modelState.currentModelId ? { isDefault: true } : {}),
-        capabilities: EMPTY_CAPABILITIES,
+        capabilities: HERMES_MODEL_CAPABILITIES,
       };
     })
     .filter((model): model is ServerProviderModel => model !== undefined);
+  // Hermes lists a named endpoint's models twice when the endpoint is also
+  // part of the shared inventory: once natively (`provider:model`, advertised
+  // as "Provider · model") and once as a `custom:<provider>:<model>` alias
+  // with the bare model name. Both rows render identically in the picker, so
+  // fold each alias into its native sibling and keep its modelId selectable
+  // via `aliases` (resolveSelectableModel matches those for persisted
+  // selections, and Hermes accepts both id shapes on set_session_model).
+  const collapsedModels: Array<ServerProviderModel> = [];
+  const canonicalIndexByIdentity = new Map<string, number>();
+  for (const model of discoveredModels) {
+    const identity = model.subProvider
+      ? `${model.subProvider}\u0000${model.name.toLowerCase()}`
+      : null;
+    const index = identity === null ? undefined : canonicalIndexByIdentity.get(identity);
+    if (index === undefined) {
+      if (identity !== null) canonicalIndexByIdentity.set(identity, collapsedModels.length);
+      collapsedModels.push(model);
+      continue;
+    }
+    const existing = collapsedModels[index];
+    if (existing === undefined) continue;
+    // The native row wins as the canonical entry regardless of arrival order;
+    // every folded alias stays selectable via `aliases`.
+    const canonical =
+      existing.slug.startsWith("custom:") && !model.slug.startsWith("custom:") ? model : existing;
+    const folded = canonical === existing ? model : existing;
+    const isDefault = Boolean(existing.isDefault) || Boolean(model.isDefault);
+    collapsedModels[index] = {
+      ...canonical,
+      ...(isDefault ? { isDefault: true } : {}),
+      aliases: [...(canonical.aliases ?? []), folded.slug, ...(folded.aliases ?? [])],
+    };
+  }
   // When Hermes routes through its "default" entry, keep that routing selectable
   // instead of forcing clients onto the first concrete discovered model.
   return modelState.currentModelId === "default"
-    ? [...HERMES_BUILT_IN_MODELS, ...discoveredModels]
-    : discoveredModels;
+    ? [...HERMES_BUILT_IN_MODELS, ...collapsedModels]
+    : collapsedModels;
 }
 
 export function hermesSlashCommands(
@@ -184,11 +263,13 @@ export function hermesSlashCommands(
 ): ReadonlyArray<ServerProviderSlashCommand> {
   const seen = new Set<string>();
   return commands.flatMap((command) => {
-    const name = command.name.trim().replace(/^\//, "");
+    const name = command.name.trim().replace(/^\/+/, "");
     if (!name || seen.has(name)) return [];
     seen.add(name);
     const description = command.description.trim();
-    const hint = command.input?.hint.trim();
+    // `input` is optional per ACP and native agents omit `hint`; a direct
+    // access would throw a TypeError and fail the whole status probe.
+    const hint = typeof command.input?.hint === "string" ? command.input.hint.trim() : undefined;
     return [
       {
         name,
@@ -245,7 +326,7 @@ const discoverHermesModelsViaAcp = (
         models: buildHermesDiscoveredModelsFromSessionModelState(started.sessionSetupResult.models),
         slashCommands: Option.match(commands, {
           onNone: () => [],
-          onSome: (event) => hermesSlashCommands(event.commands),
+          onSome: (event) => hermesSlashCommands(event.availableCommands),
         }),
       };
     }).pipe(Effect.scoped);

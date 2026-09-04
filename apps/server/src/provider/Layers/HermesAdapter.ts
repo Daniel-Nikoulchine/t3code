@@ -11,7 +11,6 @@ import {
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSession,
-  type ProviderUserInputAnswers,
   ProviderDriverKind,
   ProviderInstanceId,
   RuntimeRequestId,
@@ -22,6 +21,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -40,6 +40,12 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import {
+  discoverHermesSkills,
+  hasHermesSkillMention,
+  rewriteHermesSkillMentions,
+} from "../Drivers/HermesSkills.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -70,6 +76,10 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonStri
 
 const PROVIDER = ProviderDriverKind.make("hermes");
 const HERMES_RESUME_VERSION = 1 as const;
+// ACP has no per-turn progress deadline; without one a stalled Hermes turn
+// leaves the thread on "Working" forever. This is an absolute backstop, not
+// activity-based like Grok's watchdog — a turn that runs longer is cancelled.
+const DEFAULT_HERMES_TURN_TIMEOUT_MS = 30 * 60 * 1_000;
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
@@ -85,6 +95,8 @@ export interface HermesAdapterLiveOptions {
    * Defaults to the legacy built-in instance id (`hermes`).
    */
   readonly instanceId?: ProviderInstanceId;
+  /** Override the absolute per-turn prompt deadline in focused tests. */
+  readonly turnTimeoutMs?: number;
   /**
    * Optional per-session settings resolver. When provided the adapter yields
    * this effect at the start of every session and uses the result instead of
@@ -104,10 +116,6 @@ interface PendingApproval {
   readonly kind: string | "unknown";
 }
 
-interface PendingUserInput {
-  readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
-}
-
 interface HermesSessionContext {
   readonly threadId: ThreadId;
   readonly acpSessionId: string;
@@ -116,7 +124,7 @@ interface HermesSessionContext {
   readonly acp: AcpSessionRuntime.AcpSessionRuntime["Service"];
   notificationFiber: Fiber.Fiber<void, never> | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
-  readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
+  hermesSkillNames: ReadonlySet<string> | undefined;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
   lastPlanFingerprint: string | undefined;
   activeTurnId: TurnId | undefined;
@@ -128,6 +136,15 @@ interface HermesSessionContext {
   promptsInFlight: number;
   readonly promptSettlements: Set<Deferred.Deferred<void>>;
   stopped: boolean;
+  /**
+   * Model selection already applied to the live ACP session via
+   * `session/set_model`. Re-sending the same id re-runs Hermes' provider
+   * resolution, which can silently reroute an explicit `provider:model`
+   * pick through model-name detection; skipping identical re-applies keeps
+   * the session on the endpoint the user selected.
+   */
+  appliedModel: string | undefined;
+  appliedReasoningEffort: string | undefined;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -137,19 +154,6 @@ function settlePendingApprovalsAsCancelled(
   return Effect.forEach(
     pendingEntries,
     (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
-}
-
-function settlePendingUserInputsAsEmptyAnswers(
-  pendingUserInputs: ReadonlyMap<ApprovalRequestId, PendingUserInput>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingUserInputs.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.answers, {}).pipe(Effect.ignore),
     {
       discard: true,
     },
@@ -177,6 +181,43 @@ export function resolveHermesRuntimeMode(runtimeMode: RuntimeMode): string {
     case "auto":
       return "default";
   }
+}
+
+export function getHermesReasoningEffort(
+  modelSelection:
+    | {
+        readonly options?: ReadonlyArray<{ readonly id: string; readonly value: string | boolean }>;
+      }
+    | undefined,
+): string | undefined {
+  const raw = modelSelection?.options?.find((option) => option.id === "reasoningEffort")?.value;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function applyHermesReasoningEffort<E>(input: {
+  readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setConfigOption">;
+  readonly reasoningEffort: string | undefined;
+  readonly mapError: (context: {
+    readonly cause: import("effect-acp/errors").AcpError;
+    readonly method: "session/set_config_option";
+  }) => E;
+}): Effect.Effect<void, E> {
+  if (!input.reasoningEffort) return Effect.void;
+  return input.runtime.setConfigOption("reasoning_effort", input.reasoningEffort).pipe(
+    Effect.mapError((cause) => input.mapError({ cause, method: "session/set_config_option" })),
+    Effect.asVoid,
+    // Reasoning effort is best-effort: a session without it is still usable,
+    // but a silent failure would leave the picker lying about the active
+    // effort, so log and continue instead of failing the turn.
+    Effect.catchCause((cause) =>
+      Effect.logWarning(
+        "Failed to apply Hermes reasoning effort; continuing with session default.",
+        {
+          cause,
+        },
+      ),
+    ),
+  ) as unknown as Effect.Effect<void, E>;
 }
 
 function applyRequestedSessionConfiguration<E>(input: {
@@ -278,6 +319,11 @@ export function makeHermesAdapter(
 ) {
   return Effect.gen(function* () {
     const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("hermes");
+    const requestedTurnTimeoutMs = options?.turnTimeoutMs;
+    const turnTimeoutMs =
+      typeof requestedTurnTimeoutMs === "number" && Number.isFinite(requestedTurnTimeoutMs)
+        ? Math.max(1, Math.floor(requestedTurnTimeoutMs))
+        : DEFAULT_HERMES_TURN_TIMEOUT_MS;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -423,7 +469,6 @@ export function makeHermesAdapter(
         if (ctx.stopped) return;
         ctx.stopped = true;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.notificationFiber) {
           yield* Fiber.interrupt(ctx.notificationFiber);
         }
@@ -473,7 +518,6 @@ export function makeHermesAdapter(
           }
 
           const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
-          const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
           yield* Effect.addFinalizer(() =>
@@ -623,6 +667,12 @@ export function makeHermesAdapter(
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
+          yield* applyHermesReasoningEffort({
+            runtime: acp,
+            reasoningEffort: getHermesReasoningEffort(hermesModelSelection),
+            mapError: ({ cause, method }) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+          });
 
           const now = yield* nowIso;
           const configuredModel = resolveHermesModelId(hermesModelSelection?.model);
@@ -652,7 +702,7 @@ export function makeHermesAdapter(
             acp,
             notificationFiber: undefined,
             pendingApprovals,
-            pendingUserInputs,
+            hermesSkillNames: undefined,
             turns: [],
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
@@ -660,6 +710,11 @@ export function makeHermesAdapter(
             promptsInFlight: 0,
             promptSettlements: new Set(),
             stopped: false,
+            // Seed with the resolved session model (same fallback chain as
+            // `session.model` above) so the first sendTurn without an explicit
+            // selection compares equal and skips a redundant `set_mode` RPC.
+            appliedModel: configuredModel ?? currentModel ?? "default",
+            appliedReasoningEffort: getHermesReasoningEffort(hermesModelSelection),
           };
 
           const nf = yield* Stream.runDrain(
@@ -743,33 +798,30 @@ export function makeHermesAdapter(
                         turnId: ctx.activeTurnId,
                         ...(event.itemId ? { itemId: event.itemId } : {}),
                         text: event.text,
-                        streamKind: event.streamKind,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "ThoughtDelta":
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    yield* offerRuntimeEvent(
+                      makeAcpContentDeltaEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        streamKind: "reasoning_text",
+                        text: event.text,
                         rawPayload: event.rawPayload,
                       }),
                     );
                     return;
                   case "AvailableCommandsUpdated":
-                    return;
-                  case "UsageUpdated":
-                    yield* offerRuntimeEvent({
-                      type: "thread.token-usage.updated",
-                      ...(yield* makeEventStamp()),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId: ctx.activeTurnId,
-                      payload: {
-                        usage: {
-                          usedTokens: event.used,
-                          ...(event.size > 0 ? { maxTokens: event.size } : {}),
-                          compactsAutomatically: true,
-                        },
-                      },
-                      raw: {
-                        source: "acp.jsonrpc",
-                        method: "session/update",
-                        payload: event.rawPayload,
-                      },
-                    });
                     return;
                 }
               }),
@@ -852,6 +904,15 @@ export function makeHermesAdapter(
               ctx.activeTurnId = undefined;
             }
           };
+          // A fresh turn id is a UUID that is never reused, so a preparation
+          // abort must retire it from the interrupt set right away; otherwise
+          // every aborted preparation leaks one entry for the session's
+          // lifetime. A steered turn keeps running and must stay marked.
+          const retireAbortedFreshTurn = () => {
+            if (steeringTurnId === undefined) {
+              ctx.interruptedTurnIds.delete(turnId);
+            }
+          };
 
           if (
             steeringTurnId !== undefined &&
@@ -891,17 +952,42 @@ export function makeHermesAdapter(
             }
           }
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-          if (input.input?.trim()) {
-            promptParts.push({ type: "text", text: input.input.trim() });
+          const rawPrompt = input.input?.trim() ?? "";
+          if (rawPrompt) {
+            // Hermes invokes skills natively as `/name`; the composer inserts
+            // `$name`. Rewrite known mentions so the agent sees its own form.
+            let hermesSkillNames = ctx.hermesSkillNames;
+            if (hasHermesSkillMention(rawPrompt) && hermesSkillNames === undefined) {
+              const skills = yield* discoverHermesSkills(options?.environment).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              );
+              hermesSkillNames = new Set(
+                skills
+                  .filter((skill) => skill.enabled && skill.userInvocable !== false)
+                  .map((skill) => skill.name),
+              );
+              ctx.hermesSkillNames = hermesSkillNames;
+            }
+            const prompt = hermesSkillNames
+              ? rewriteHermesSkillMentions(rawPrompt, hermesSkillNames)
+              : rawPrompt;
+            promptParts.push({ type: "text", text: prompt });
           }
           if (input.attachments && input.attachments.length > 0) {
             for (const attachment of input.attachments) {
+              // Hermes ingests images only. Generic files reach the agent
+              // through the path line ProviderService puts in the prompt.
+              if (attachment.type !== "image") {
+                continue;
+              }
               const attachmentPath = resolveAttachmentPath({
                 attachmentsDir: serverConfig.attachmentsDir,
                 attachment,
               });
               if (!attachmentPath) {
                 clearPhantomActiveTurn();
+                retireAbortedFreshTurn();
                 return yield* new ProviderAdapterRequestError({
                   provider: PROVIDER,
                   method: "session/prompt",
@@ -931,6 +1017,7 @@ export function makeHermesAdapter(
           if (promptParts.length === 0) {
             // A rejected turn must not leave a phantom active turn behind.
             clearPhantomActiveTurn();
+            retireAbortedFreshTurn();
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: "sendTurn",
@@ -942,6 +1029,7 @@ export function makeHermesAdapter(
           // I/O or config) must not publish a turn.started afterwards.
           if (ctx.interruptedTurnIds.has(turnId)) {
             clearPhantomActiveTurn();
+            retireAbortedFreshTurn();
             return yield* new ProviderAdapterRequestError({
               provider: PROVIDER,
               method: "session/prompt",
@@ -953,18 +1041,41 @@ export function makeHermesAdapter(
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
           const model = turnModelSelection?.model ?? ctx.session.model;
           const resolvedModel = resolveHermesModelId(model) ?? ctx.session.model ?? "default";
-          yield* applyRequestedSessionConfiguration({
-            runtime: ctx.acp,
-            runtimeMode: ctx.session.runtimeMode,
-            modelSelection:
-              model === undefined
-                ? undefined
-                : {
-                    model,
-                  },
-            mapError: ({ cause, method }) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-          });
+          // Hermes reruns provider resolution on every `session/set_model`,
+          // and its model-name detection can override an explicit
+          // `provider:model` pick (e.g. `gmi:MiniMaxAI/MiniMax-M3` silently
+          // rerouted to NVIDIA NIM because NIM's static catalog lists the
+          // bare name). Only send the RPC when the selection actually
+          // changed, so an unchanged per-turn selection cannot reroute the
+          // session's already-applied provider.
+          if (ctx.appliedModel !== resolvedModel) {
+            yield* applyRequestedSessionConfiguration({
+              runtime: ctx.acp,
+              runtimeMode: ctx.session.runtimeMode,
+              modelSelection:
+                model === undefined
+                  ? undefined
+                  : {
+                      model,
+                    },
+              mapError: ({ cause, method }) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+            });
+            ctx.appliedModel = resolvedModel;
+          }
+          const requestedReasoningEffort = getHermesReasoningEffort(turnModelSelection);
+          if (
+            requestedReasoningEffort !== undefined &&
+            ctx.appliedReasoningEffort !== requestedReasoningEffort
+          ) {
+            yield* applyHermesReasoningEffort({
+              runtime: ctx.acp,
+              reasoningEffort: requestedReasoningEffort,
+              mapError: ({ cause, method }) =>
+                mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+            });
+            ctx.appliedReasoningEffort = requestedReasoningEffort;
+          }
           if (steeringTurnId === undefined) {
             ctx.lastPlanFingerprint = undefined;
           }
@@ -985,15 +1096,63 @@ export function makeHermesAdapter(
             });
           }
 
-          const result = yield* ctx.acp
+          const promptResult = yield* ctx.acp
             .prompt({
-              prompt: promptParts,
+              prompt: [
+                ...promptParts,
+                // ACP has no system-message field; keep runtime context
+                // separate from the user's text, like Cursor/Grok do.
+                {
+                  type: "text",
+                  text: buildRuntimeInstructions({ harness: "Hermes", model: resolvedModel }),
+                },
+              ],
             })
             .pipe(
               Effect.mapError((error) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
               ),
+              Effect.timeoutOption(Duration.millis(turnTimeoutMs)),
             );
+
+          if (Option.isNone(promptResult)) {
+            // The deadline fired. A steered turn (another prompt in flight)
+            // keeps running, so only the last remaining prompt settles it —
+            // cancelling here would kill the surviving prompt's ACP request.
+            const remainingPrompts = yield* withThreadLock(
+              input.threadId,
+              Effect.sync(() => ctx.promptsInFlight),
+            );
+            if (remainingPrompts <= 1) {
+              yield* Effect.ignore(
+                ctx.acp.cancel.pipe(
+                  Effect.mapError((error) =>
+                    mapAcpToAdapterError(PROVIDER, input.threadId, "session/cancel", error),
+                  ),
+                ),
+              );
+              yield* withThreadLock(
+                input.threadId,
+                Effect.gen(function* () {
+                  ctx.interruptedTurnIds.delete(turnId);
+                  yield* offerRuntimeEvent({
+                    type: "turn.completed",
+                    ...(yield* makeEventStamp()),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId,
+                    payload: { state: "cancelled", stopReason: "cancelled" },
+                  });
+                }),
+              );
+            }
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/prompt",
+              detail: `Hermes turn timed out after ${turnTimeoutMs}ms without completing.`,
+            });
+          }
+          const result = promptResult.value;
 
           return yield* withThreadLock(
             input.threadId,
@@ -1015,6 +1174,11 @@ export function makeHermesAdapter(
               // superseded prompt resolving (usually cancelled) while another is
               // in flight or pending must leave the merged turn running.
               if (ctx.promptsInFlight === 1) {
+                // The turn is over and its id will never be reused (every
+                // sendTurn mints a fresh UUID), so retire it from the
+                // interrupt set instead of leaking one entry per turn for
+                // the session's lifetime.
+                ctx.interruptedTurnIds.delete(turnId);
                 yield* offerRuntimeEvent({
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
@@ -1063,7 +1227,6 @@ export function makeHermesAdapter(
             ctx.interruptedTurnIds.add(interruptedTurnId);
           }
           yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-          yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
           yield* Effect.ignore(
             ctx.acp.cancel.pipe(
               Effect.mapError((error) =>
@@ -1092,22 +1255,16 @@ export function makeHermesAdapter(
         yield* Deferred.succeed(pending.decision, decision);
       });
 
-    const respondToUserInput: HermesAdapterShape["respondToUserInput"] = (
-      threadId,
-      requestId,
-      answers,
-    ) =>
+    const respondToUserInput: HermesAdapterShape["respondToUserInput"] = (threadId, requestId) =>
       Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
-        const pending = ctx.pendingUserInputs.get(requestId);
-        if (!pending) {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "hermes/ask_question",
-            detail: `Unknown pending user-input request: ${requestId}`,
-          });
-        }
-        yield* Deferred.succeed(pending.answers, answers);
+        yield* requireSession(threadId);
+        // Hermes only sends session/request_permission, never user-input
+        // requests, so there is nothing to answer: fail instead of dropping it.
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "session/request_permission",
+          detail: `Hermes does not emit user-input requests (unknown request: ${requestId}).`,
+        });
       });
 
     const readThread: HermesAdapterShape["readThread"] = (threadId) =>

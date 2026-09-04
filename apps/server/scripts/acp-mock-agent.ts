@@ -52,6 +52,45 @@ const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
+const hermesProfile = process.env.T3_ACP_HERMES === "1";
+const hermesStateLogPath = process.env.T3_ACP_HERMES_STATE_LOG_PATH;
+// Canonical Hermes effort ladder (mirrors `parse_reasoning_effort` in
+// hermes_constants.py plus the `none` disable level). Unknown values keep
+// the previous effort, exactly like the real Hermes ACP server.
+const HERMES_VALID_EFFORTS: ReadonlySet<string> = new Set([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+]);
+let currentHermesReasoningEffort = "medium";
+
+function normalizeHermesReasoningEffort(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "false" ||
+    normalized === "disabled" ||
+    normalized === "off" ||
+    normalized === "no"
+  ) {
+    return "none";
+  }
+  return HERMES_VALID_EFFORTS.has(normalized) ? normalized : undefined;
+}
+
+function logHermesState(event: string): void {
+  if (!hermesStateLogPath) return;
+  NodeFS.appendFileSync(
+    hermesStateLogPath,
+    `${JSON.stringify({ event, reasoningEffort: currentHermesReasoningEffort, modelId: currentModelId })}\n`,
+    "utf8",
+  );
+}
 const initialGrokReasoningEffort =
   process.env.T3_ACP_INITIAL_GROK_REASONING_EFFORT?.trim() || undefined;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
@@ -298,6 +337,14 @@ const antigravityModels = [
   { modelId: "gemini-test-high", name: "Gemini Test High" },
 ] satisfies ReadonlyArray<AcpSchema.ModelInfo>;
 
+// Mirrors the real Hermes ACP: a `default` routing entry plus concrete
+// models. `session/set_model` accepts both shapes; `reasoning_effort` lives
+// outside the model id and is applied via `session/set_config_option`.
+const hermesAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
+  { modelId: "default", name: "Hermes Default" },
+  { modelId: "hermes-test-alt", name: "Hermes Test Alt" },
+];
+
 const availableModes: ReadonlyArray<AcpSchema.SessionMode> = antigravityProfile
   ? [
       { id: "default", name: "Default" },
@@ -352,6 +399,15 @@ const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
 function modelState(): AcpSchema.SessionModelState {
   if (antigravityProfile) {
     return { currentModelId, availableModels: antigravityModels };
+  }
+  if (hermesProfile) {
+    const hermesModelId = hermesAcpModels.some((model) => model.modelId === currentModelId)
+      ? currentModelId
+      : "default";
+    return {
+      currentModelId: hermesModelId,
+      availableModels: hermesAcpModels,
+    };
   }
   const modelId = grokAcpModels.some((model) => model.modelId === currentModelId)
     ? currentModelId
@@ -533,6 +589,24 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionModel((request) =>
     Effect.gen(function* () {
+      if (hermesProfile) {
+        if (!hermesAcpModels.some((model) => model.modelId === request.modelId)) {
+          return yield* AcpError.AcpRequestError.invalidParams(
+            `Unknown mock model id: ${request.modelId}`,
+            {
+              method: "session/set_model",
+              params: request,
+            },
+          );
+        }
+        currentModelId = request.modelId;
+        // The real Hermes rebuilds the agent on a model switch and re-applies
+        // the stored effort, so it survives the switch without a new client
+        // RPC. The mock keeps it in a separate variable, which is the same
+        // observable behavior; log it so tests can assert the retention.
+        logHermesState("model-switched");
+        return {};
+      }
       if (!modelState().availableModels.some((model) => model.modelId === request.modelId)) {
         return yield* AcpError.AcpRequestError.invalidParams(
           `Unknown mock model id: ${request.modelId}`,
@@ -562,6 +636,17 @@ const program = Effect.gen(function* () {
             params: request,
           },
         );
+      }
+      if (hermesProfile && request.configId === "reasoning_effort") {
+        // Mirror the real Hermes server: validate through the shared ladder,
+        // keep the previous effort on unknown values, and still succeed.
+        // The real server answers with an empty config list.
+        const normalized = normalizeHermesReasoningEffort(request.value);
+        if (normalized !== undefined) {
+          currentHermesReasoningEffort = normalized;
+        }
+        logHermesState("reasoning-applied");
+        return { configOptions: [] };
       }
       if (request.configId === "mode" && typeof request.value === "string") {
         currentModeId = request.value;

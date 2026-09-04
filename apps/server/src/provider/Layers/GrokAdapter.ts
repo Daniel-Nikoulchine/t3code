@@ -1420,13 +1420,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                         turnId: notificationTurnId,
                         ...(event.itemId ? { itemId: event.itemId } : {}),
                         text: event.text,
-                        streamKind: event.streamKind,
                         rawPayload: event.rawPayload,
                       }),
                     );
-                    return;
-                  case "AvailableCommandsUpdated":
-                  case "UsageUpdated":
                     return;
                 }
               }),

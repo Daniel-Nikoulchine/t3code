@@ -27,7 +27,6 @@ import {
   applyHermesAcpModelSelection,
   deleteHermesSession,
   makeHermesAcpRuntime,
-  resolveHermesModelId,
 } from "../provider/acp/HermesAcpSupport.ts";
 
 const HERMES_TIMEOUT_MS = 180_000;
@@ -59,7 +58,6 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
     modelSelection: ModelSelection;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
-      const resolvedModel = resolveHermesModelId(modelSelection.model);
       const outputRef = yield* Ref.make("");
       const sessionIdRef = yield* Ref.make<string | undefined>(undefined);
       const probeEnvironment = {
@@ -107,7 +105,7 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
         yield* Ref.set(sessionIdRef, started.sessionId);
         yield* applyHermesAcpModelSelection({
           runtime,
-          model: resolvedModel,
+          model: modelSelection.model,
           mapError: (cause) =>
             new TextGenerationError({
               operation,

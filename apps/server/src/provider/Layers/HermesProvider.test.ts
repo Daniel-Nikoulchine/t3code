@@ -72,7 +72,7 @@ describe("Hermes provider metadata", () => {
     ]);
   });
 
-  it("labels bare custom:<provider>:<model> aliases from their labeled siblings", () => {
+  it("folds bare custom:<provider>:<model> aliases into their identical native sibling", () => {
     const models = buildHermesDiscoveredModelsFromSessionModelState({
       currentModelId: "b-ai:deepseek-v4-flash",
       availableModels: [
@@ -86,27 +86,45 @@ describe("Hermes provider metadata", () => {
       ],
     } satisfies EffectAcpSchema.SessionModelState);
 
-    expect(models.map(({ slug, name, subProvider }) => ({ slug, name, subProvider }))).toEqual([
+    expect(
+      models.map(({ slug, name, subProvider, aliases }) => ({ slug, name, subProvider, aliases })),
+    ).toEqual([
       {
         slug: "b-ai:deepseek-v4-flash",
         name: "deepseek-v4-flash",
         subProvider: "b.ai",
-      },
-      {
-        slug: "custom:b-ai:deepseek-v4-flash",
-        name: "deepseek-v4-flash",
-        subProvider: "b.ai",
+        aliases: ["custom:b-ai:deepseek-v4-flash"],
       },
       {
         slug: "custom:orcarouter:deepseek/deepseek-v4-flash",
         name: "deepseek/deepseek-v4-flash",
         subProvider: "orcarouter",
+        aliases: undefined,
       },
       {
         slug: "custom:solo-provider:gpt-9",
         name: "gpt-9",
         subProvider: "solo-provider",
+        aliases: undefined,
       },
+    ]);
+  });
+
+  it("marks the native sibling as default when the alias carries the current model", () => {
+    const models = buildHermesDiscoveredModelsFromSessionModelState({
+      currentModelId: "custom:b-ai:deepseek-v4-flash",
+      availableModels: [
+        { modelId: "custom:b-ai:deepseek-v4-flash", name: "deepseek-v4-flash" },
+        { modelId: "b-ai:deepseek-v4-flash", name: "b.ai · deepseek-v4-flash" },
+      ],
+    } satisfies EffectAcpSchema.SessionModelState);
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        slug: "b-ai:deepseek-v4-flash",
+        isDefault: true,
+        aliases: ["custom:b-ai:deepseek-v4-flash"],
+      }),
     ]);
   });
 
@@ -146,5 +164,40 @@ describe("Hermes provider metadata", () => {
         { name: "/model", description: "Switch model", input: { hint: "provider:model" } },
       ]),
     ).toEqual([{ name: "model", description: "Switch model", input: { hint: "provider:model" } }]);
+  });
+
+  it("tolerates advertised commands without an input hint", () => {
+    expect(
+      hermesSlashCommands([
+        {
+          name: "steer",
+          description: "Redirect active work",
+          input: {},
+        } as unknown as EffectAcpSchema.AvailableCommand,
+      ]),
+    ).toEqual([{ name: "steer", description: "Redirect active work" }]);
+  });
+
+  it("strips all leading slashes from advertised slash command names", () => {
+    expect(
+      hermesSlashCommands([
+        { name: "//steer", description: "Redirect active work", input: { hint: "" } },
+      ]),
+    ).toEqual([{ name: "steer", description: "Redirect active work" }]);
+  });
+
+  it("leaves malformed custom: slugs without a provider segment alone", () => {
+    const models = buildHermesDiscoveredModelsFromSessionModelState({
+      currentModelId: "openai:gpt-5.4",
+      availableModels: [
+        { modelId: "custom:lonely", name: "lonely" },
+        { modelId: "openai:gpt-5.4", name: "GPT-5.4" },
+      ],
+    } satisfies EffectAcpSchema.SessionModelState);
+
+    expect(models.map(({ slug, name, subProvider }) => ({ slug, name, subProvider }))).toEqual([
+      { slug: "custom:lonely", name: "lonely", subProvider: undefined },
+      { slug: "openai:gpt-5.4", name: "GPT-5.4", subProvider: undefined },
+    ]);
   });
 });
