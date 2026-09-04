@@ -169,12 +169,10 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
             runtime
               .start()
               .pipe(
-                Effect.tapError(
-                  (cause): Effect.Effect<void> =>
-                    input.onAuthorizationUrl === undefined &&
-                    isAntigravitySignInRequiredError(cause)
-                      ? provider.onAuthRequired
-                      : Effect.void,
+                Effect.tapError((cause): Effect.Effect<void> =>
+                  input.onAuthorizationUrl === undefined && isAntigravitySignInRequiredError(cause)
+                    ? provider.onAuthRequired
+                    : Effect.void,
                 ),
               ),
         };
@@ -234,6 +232,9 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
           yield* Stream.runForEach(runtime.getEvents(), (event) => {
             if (event._tag === "EventStreamBarrier") {
               return Deferred.succeed(event.acknowledge, undefined).pipe(Effect.asVoid);
+            }
+            if (event._tag === "ConfigOptionsUpdated") {
+              return provider.onConfigOptionsUpdated(event.configOptions);
             }
             return event._tag === "AvailableCommandsUpdated"
               ? provider.onAvailableCommands(event.availableCommands)
@@ -301,6 +302,7 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
         withProcess: authFlow.withProcess,
         defaultModel,
         onSessionStarted: provider.onSessionStarted,
+        onConfigOptionsUpdated: provider.onConfigOptionsUpdated,
         onAvailableCommands: provider.onAvailableCommands,
         onAuthRequired: provider.onAuthRequired,
         ...(loggers.native ? { nativeEventLogger: loggers.native } : {}),
@@ -334,7 +336,7 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
         },
         Effect.scoped,
         Effect.timeoutOrElse({
-          duration: "60 seconds",
+          duration: "90 seconds",
           orElse: () =>
             Effect.fail(
               new ProviderDriverError({
