@@ -1,3 +1,4 @@
+import { BlurTargetView } from "expo-blur";
 import { DEFAULT_TERMINAL_ID, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { type KnownTerminalSession } from "@t3tools/client-runtime/state/terminal";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -82,7 +83,7 @@ const DEFAULT_TERMINAL_ROWS = 24;
 const TERMINAL_ACCESSORY_HEIGHT = 52;
 const SHOWCASE_ENABLED = process.env.EXPO_PUBLIC_SHOWCASE === "1";
 
-class TerminalClipboardReadError extends Schema.TaggedErrorClass<TerminalClipboardReadError>()(
+class TerminalClipboardReadError extends Schema.TaggedError<TerminalClipboardReadError>()(
   "TerminalClipboardReadError",
   { terminalId: Schema.String, cause: Schema.Defect() },
 ) {
@@ -154,6 +155,7 @@ type ThreadTerminalRouteScreenProps = StaticScreenProps<{
 }>;
 
 export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps) {
+  const terminalBlurTarget = useRef<View>(null);
   const navigation = useNavigation();
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const resizeTerminal = useAtomCommand(terminalEnvironment.resize, "terminal resize");
@@ -848,6 +850,19 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
     [navigation, selectedThread, terminalId],
   );
 
+  const handleCloseTerminal = useCallback(() => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    navigation.dispatch(
+      StackActions.replace("Thread", {
+        environmentId: params.environmentId,
+        threadId: params.threadId,
+      }),
+    );
+  }, [navigation, params.environmentId, params.threadId]);
+
   const navigateAwayAfterExit = useCallback(() => {
     // With other shells still live, fall through to the previous one instead
     // of dropping the user back on the thread.
@@ -1143,7 +1158,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
         <AndroidScreenHeader
           title="Terminal"
           subtitle={headerSubtitle}
-          onBack={navigation.canGoBack() ? () => navigation.goBack() : undefined}
+          onBack={handleCloseTerminal}
           trailing={
             <>
               {layout.usesSplitView ? (
@@ -1179,6 +1194,12 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
 
       {layout.usesSplitView ? (
         <NativeHeaderToolbar placement="left">
+          <NativeHeaderToolbar.Button
+            accessibilityLabel="Close terminal"
+            icon="xmark"
+            onPress={handleCloseTerminal}
+            separateBackground
+          />
           <NativeHeaderToolbar.Button
             accessibilityLabel={panes.primarySidebarVisible ? "Maximize terminal" : "Show threads"}
             icon={
@@ -1262,7 +1283,21 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
           />
         ) : (
           <>
-            <View className="flex-1" style={{ paddingBottom: terminalBottomInset }}>
+            <BlurTargetView
+              ref={terminalBlurTarget}
+              style={{
+                flex: 1,
+                paddingBottom: terminalBottomInset,
+              }}
+            >
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  backgroundColor: terminalTheme.background,
+                }}
+              />
               <TerminalSurface
                 autoFocus={!SHOWCASE_ENABLED}
                 buffer={terminalSurfaceBuffer}
@@ -1275,7 +1310,7 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
                 terminalKey={terminalKey}
                 theme={terminalTheme}
               />
-            </View>
+            </BlurTargetView>
 
             {isAccessoryVisible ? (
               <KeyboardStickyView
@@ -1342,6 +1377,8 @@ export function ThreadTerminalRouteScreen(props: ThreadTerminalRouteScreenProps)
               >
                 <GlassSurface
                   chrome="none"
+                  blurTarget={terminalBlurTarget}
+                  fallbackColor={terminalTheme.background}
                   glassEffectStyle="regular"
                   tintColor="transparent"
                   style={{
