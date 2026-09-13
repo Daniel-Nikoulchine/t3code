@@ -60,6 +60,12 @@ Install T3 Code from the
 The phone connects to a server on another machine. Follow
 [remote access](./remote-access.md) to link it through T3 Connect or a pairing URL.
 
+If the app crashes during launch, open Settings → Diagnostics on the next launch
+that succeeds. It lists startup crashes from the last 7 days with the error and
+component stack that store crash reports leave out. Copy the report and paste it
+into a GitHub issue. Error messages can quote values from the app, so read it over
+before sharing.
+
 ## Providers
 
 Open **Settings → Providers** in the web or desktop app, select the environment,
@@ -67,15 +73,15 @@ and enable the provider you want. Installation, login, and configuration belong
 to that environment's machine, even when you connect from a phone or another
 computer.
 
-| Provider    | Install and authenticate                                                                     |
-| ----------- | -------------------------------------------------------------------------------------------- |
-| Codex       | Install [Codex CLI](https://developers.openai.com/codex/cli), then run `codex login`.        |
-| Claude      | Install [Claude Code](https://claude.com/product/claude-code), then run `claude auth login`. |
-| Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                        |
-| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                           |
+| Provider    | Install and authenticate                                                                        |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| Codex       | Install [Codex CLI](https://developers.openai.com/codex/cli), then run `codex login`.           |
+| Claude      | Install [Claude Code](https://claude.com/product/claude-code), then run `claude auth login`.    |
+| Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                           |
+| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                              |
 | Hermes      | Install [Hermes Agent](https://hermes-agent.nousresearch.com), then run `hermes setup --quick`. |
-| OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                     |
-| Antigravity | Install and sign in with Google from T3 Code's provider settings.                            |
+| OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                        |
+| Antigravity | Install and sign in with Google from T3 Code's provider settings.                               |
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.

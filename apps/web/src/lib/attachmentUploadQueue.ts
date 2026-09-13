@@ -333,7 +333,7 @@ async function runUpload(job: UploadJob): Promise<void> {
 }
 
 function pumpUploads(): void {
-  for (let index = 0; index < queue.length; ) {
+  for (let index = 0; index < queue.length;) {
     const job = queue[index]!;
     const active = activeUploadsByEnvironment.get(job.environmentId) ?? 0;
     if (active >= MAX_UPLOADS_PER_ENVIRONMENT) {
@@ -563,7 +563,7 @@ export function getUploadedAttachments(input: {
       name: image.name,
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
-      ...(image.type === "image" && image.source ? { source: image.source } : {}),
+      ...(image.source ? { source: image.source } : {}),
     });
   }
   return attachments;
