@@ -68,20 +68,26 @@ before sharing.
 
 ## Providers
 
-Open **Settings → Providers** in the web or desktop app, select the environment,
-and enable the provider you want. Installation, login, and configuration belong
-to that environment's machine, even when you connect from a phone or another
-computer.
+Open **Settings → Providers** in the web or desktop app, select the
+environment, and enable the provider you want. Installation, login, and
+configuration belong to that environment's machine, even when you connect
+from a phone or another computer.
 
-| Provider    | Install and authenticate                                                                        |
-| ----------- | ----------------------------------------------------------------------------------------------- |
-| Codex       | Install [Codex CLI](https://developers.openai.com/codex/cli), then run `codex login`.           |
-| Claude      | Install [Claude Code](https://claude.com/product/claude-code), then run `claude auth login`.    |
-| Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                           |
-| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                              |
-| Hermes      | Install [Hermes Agent](https://hermes-agent.nousresearch.com), then run `hermes setup --quick`. |
-| OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                        |
-| Antigravity | Install and sign in with Google from T3 Code's provider settings.                               |
+| Provider    | Install and authenticate                                                                                                     |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Codex       | Install [Codex CLI](https://developers.openai.com/codex/cli), then run `codex login`.                                        |
+| Claude      | Install [Claude Code](https://claude.com/product/claude-code), then run `claude auth login`.                                 |
+| Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                                                        |
+| Devin       | Install [Devin CLI](https://devin.ai/cli), then run `devin auth login`.                                                      |
+| Droid       | Install [Droid CLI](https://docs.factory.ai/droid-cli/overview), then run `droid` and sign in.                               |
+| Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                                                           |
+| DeepSeek    | Install the DeepSeek CLI (`dsh`), then set `DEEPSEEK_API_KEY` for the server process.                                        |
+| Hermes      | Install [Hermes Agent](https://hermes-agent.nousresearch.com), then run `hermes setup --quick`.                              |
+| OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                     |
+| OpenClaw    | Install [OpenClaw](https://docs.openclaw.ai), then run `openclaw onboard` and start the gateway with `openclaw gateway run`. |
+| Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                            |
+| Pi          | Install [Pi coding agent](https://github.com/badlogic/pi-mono), then run `pi` and sign in with `/login`.                     |
+| ZCode       | Install [ZCode CLI](https://www.npmjs.com/package/zcode-app-cli), then run `zcode login`.                                    |
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.
@@ -101,8 +107,11 @@ base URL. Mark secret values as sensitive; after saving, T3 Code does not displa
 their original values.
 
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
-[Claude](./providers-claude.md), [Hermes](./providers-hermes.md), [OpenCode](./providers-opencode.md), and
-[Antigravity](./providers-antigravity.md).
+[Claude](./providers-claude.md), [Droid](./providers-droid.md), [Devin](./providers-devin.md), [Hermes](./providers-hermes.md), [OpenCode](./providers-opencode.md),
+[Antigravity](./providers-antigravity.md), [OpenClaw](./providers-openclaw.md#multiple-openclaw-instances), and [Pi](./providers-pi.md).
+
+To run instances on stored API keys or external model endpoints instead of a
+CLI login, see [Providers](./providers.md).
 
 ## Next steps
 

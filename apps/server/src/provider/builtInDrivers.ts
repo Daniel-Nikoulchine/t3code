@@ -21,12 +21,22 @@
  * @module provider/builtInDrivers
  */
 import { ClaudeDriver, type ClaudeDriverEnv } from "./Drivers/ClaudeDriver.ts";
+import { ClineDriver, type ClineDriverEnv } from "./Drivers/ClineDriver.ts";
 import { CodexDriver, type CodexDriverEnv } from "./Drivers/CodexDriver.ts";
 import { CursorDriver, type CursorDriverEnv } from "./Drivers/CursorDriver.ts";
+import { DeepSeekDriver, type DeepSeekDriverEnv } from "./Drivers/DeepSeekDriver.ts";
+import { DevinDriver, type DevinDriverEnv } from "./Drivers/DevinDriver.ts";
+import { DroidDriver, type DroidDriverEnv } from "./Drivers/DroidDriver.ts";
 import { GrokDriver, type GrokDriverEnv } from "./Drivers/GrokDriver.ts";
+import { CopilotDriver, type CopilotDriverEnv } from "./Drivers/CopilotDriver.ts";
 import { HermesDriver, type HermesDriverEnv } from "./Drivers/HermesDriver.ts";
+import { KiloDriver, type KiloDriverEnv } from "./Drivers/KiloDriver.ts";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "./Drivers/OpenCodeDriver.ts";
+import { OmpDriver, type OmpDriverEnv } from "./Drivers/OmpDriver.ts";
+import { OpenClawDriver, type OpenClawDriverEnv } from "./Drivers/OpenClawDriver.ts";
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
+import { PiDriver, type PiDriverEnv } from "./Drivers/PiDriver.ts";
+import { ZcodeDriver, type ZcodeDriverEnv } from "./Drivers/ZcodeDriver.ts";
 import type { AnyProviderDriver } from "./ProviderDriver.ts";
 
 /**
@@ -36,12 +46,21 @@ import type { AnyProviderDriver } from "./ProviderDriver.ts";
  */
 export type BuiltInDriversEnv =
   | ClaudeDriverEnv
+  | ClineDriverEnv
   | CodexDriverEnv
   | CursorDriverEnv
+  | DeepSeekDriverEnv
+  | DevinDriverEnv
+  | DroidDriverEnv
   | GrokDriverEnv
   | HermesDriverEnv
+  | KiloDriverEnv
   | OpenCodeDriverEnv
-  | AntigravityDriverEnv;
+  | OmpDriverEnv
+  | OpenClawDriverEnv
+  | AntigravityDriverEnv
+  | PiDriverEnv
+  | ZcodeDriverEnv;
 
 /**
  * Ordered list of built-in drivers. Order matters only for tie-breaking in
@@ -51,9 +70,18 @@ export type BuiltInDriversEnv =
 export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv>> = [
   CodexDriver,
   ClaudeDriver,
+  ClineDriver,
   CursorDriver,
+  DeepSeekDriver,
+  DevinDriver,
+  DroidDriver,
   GrokDriver,
   HermesDriver,
+  KiloDriver,
   OpenCodeDriver,
+  OmpDriver,
+  OpenClawDriver,
   AntigravityDriver,
+  PiDriver,
+  ZcodeDriver,
 ];

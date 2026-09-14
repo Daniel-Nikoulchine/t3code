@@ -10,6 +10,7 @@ import {
   searchableSetting,
   searchSettings,
   SETTINGS_SEARCH_ITEMS,
+  SETTINGS_SECTION_LABELS,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -45,6 +46,11 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
+  it("points the single providers section at the merged providers route", () => {
+    expect(SETTINGS_SECTION_LABELS["/settings/providers"]).toBe("Providers");
+    expect(SETTINGS_SECTION_LABELS).not.toHaveProperty("/settings/harness");
+  });
+
   it("matches titles, sections, and remembered setting details", () => {
     expect(searchSettings("word", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
     expect(searchSettings("network", ITEMS).map((item) => item.id)).toEqual(["network-access"]);
@@ -116,6 +122,73 @@ describe("searchSettings", () => {
     },
   );
 
+  it.each([
+    "base url",
+    "backend proxy",
+    "api key variable",
+    "openai-compatible backend",
+    "provider preset",
+    "provider list",
+  ])("routes model-backend settings to the Providers tab by %s", (query) => {
+    expect(searchSettings(query)[0]).toMatchObject({
+      id: "provider-backends",
+      to: "/settings/providers",
+    });
+  });
+
+  it("finds the instance editor via proxy terms and the connections list via global proxy", () => {
+    expect(searchSettings("use proxy")[0]).toMatchObject({
+      id: "providers",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("use provider")[0]).toMatchObject({
+      id: "providers",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("proxy").map((item) => item.id)).toContain("provider-backends");
+    expect(searchSettings("global proxy")[0]).toMatchObject({
+      id: "provider-backends",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("global provider")[0]).toMatchObject({
+      id: "provider-backends",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("provider template")[0]).toMatchObject({
+      id: "provider-backends",
+      to: "/settings/providers",
+    });
+  });
+  it("keeps instance discovery on the merged Providers tab", () => {
+    expect(searchSettings("binary path")[0]).toMatchObject({
+      id: "providers",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("Antigravity")[0]).toMatchObject({
+      id: "providers",
+      to: "/settings/providers",
+    });
+  });
+
+  it("finds the new provider sections", () => {
+    expect(searchSettings("stored api key")[0]).toMatchObject({
+      id: "provider-credentials",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("models matrix")[0]).toMatchObject({
+      id: "model-catalog",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("routing rules")[0]).toMatchObject({
+      id: "model-router",
+      to: "/settings/providers",
+    });
+    expect(searchSettings("upstream model")[0]).toMatchObject({
+      id: "model-router",
+      to: "/settings/providers",
+    });
+  });
+
   it("returns no results for an empty query", () => {
     expect(searchSettings("   ", ITEMS)).toEqual([]);
   });
@@ -159,6 +232,10 @@ describe("searchSettings", () => {
       "follow-change-request-templates",
       "git-fetch-interval",
       "network-access",
+      "provider-backends",
+      "provider-credentials",
+      "model-catalog",
+      "model-router",
       "publish-agent-activity",
       "provider-health-check-interval",
       "source-control-writer-model",

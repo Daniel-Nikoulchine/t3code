@@ -34,7 +34,7 @@ import {
 } from "../Layers/OpenCodeProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import { OpenCodeRuntime } from "../opencodeRuntime.ts";
+import { OpenCodeRuntime, mergeOpenCodeBackendConfigContent } from "../opencodeRuntime.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -43,6 +43,7 @@ import {
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
@@ -96,7 +97,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
   },
   configSchema: OpenCodeSettings,
   defaultConfig: (): OpenCodeSettings => decodeOpenCodeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -106,7 +107,27 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // The backend overlay reaches the spawned OpenCode server through this
+      // env. A backend additionally injects a `t3-backend` provider entry into
+      // OPENCODE_CONFIG_CONTENT so the endpoint's models are selectable as
+      // `t3-backend/<slug>`; the merge preserves the user's own config content.
+      const instanceEnv = mergeProviderInstanceEnvironment(environment);
+      const backendEnv = resolveModelBackendEnvironment(backend, process.env);
+      const backendConfigContent =
+        backend === undefined
+          ? undefined
+          : mergeOpenCodeBackendConfigContent({
+              backend,
+              existingContent: instanceEnv.OPENCODE_CONFIG_CONTENT,
+              apiKey: backendEnv.OPENAI_API_KEY ?? backendEnv.ANTHROPIC_API_KEY,
+            });
+      const processEnv = {
+        ...instanceEnv,
+        ...backendEnv,
+        ...(backendConfigContent !== undefined
+          ? { OPENCODE_CONFIG_CONTENT: backendConfigContent }
+          : {}),
+      };
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -117,6 +138,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        ...(backend === undefined ? {} : { backend }),
       });
       const effectiveConfig = { ...config, enabled } satisfies OpenCodeSettings;
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER } from "./model.ts";
+import { ModelBackendConnectionId } from "./modelBackend.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
@@ -237,6 +238,74 @@ describe("ClientSettings default diff file state", () => {
     expect(decodeClientSettingsPatch({ diffFilesCollapsed }).diffFilesCollapsed).toBe(
       diffFilesCollapsed,
     );
+  });
+});
+
+describe("Devin provider settings", () => {
+  it("defaults the built-in Devin CLI to disabled", () => {
+    expect(DEFAULT_SERVER_SETTINGS.providers.devin).toEqual({
+      enabled: false,
+      binaryPath: "devin",
+      customModels: [],
+    });
+  });
+
+  it("uses the Devin-configured model for interactive and metadata jobs", () => {
+    const devin = ProviderDriverKind.make("devin");
+    expect(DEFAULT_MODEL_BY_PROVIDER[devin]).toBe("devin-default");
+    expect(DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[devin]).toBe("devin-default");
+  });
+
+  it("decodes Devin legacy patches without disturbing other providers", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          devin: {
+            binaryPath: " /opt/bin/devin ",
+            customModels: ["opus"],
+          },
+        },
+      }).providers?.devin,
+    ).toEqual({
+      binaryPath: "/opt/bin/devin",
+      customModels: ["opus"],
+    });
+  });
+});
+
+describe("Pi provider settings", () => {
+  it("defaults the built-in Pi CLI to disabled with an empty home", () => {
+    expect(DEFAULT_SERVER_SETTINGS.providers.pi).toEqual({
+      enabled: false,
+      binaryPath: "pi",
+      homePath: "",
+      customModels: [],
+    });
+  });
+
+  it("uses the Pi-configured model for interactive and metadata jobs", () => {
+    const pi = ProviderDriverKind.make("pi");
+    expect(DEFAULT_MODEL_BY_PROVIDER[pi]).toBe("default");
+    expect(DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[pi]).toBe("default");
+    expect(resolveProviderInstanceEnabled({ driver: pi, config: {} })).toBe(false);
+  });
+
+  it("decodes Pi legacy patches without disturbing other providers", () => {
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          pi: {
+            binaryPath: " /opt/bin/pi ",
+            homePath: " ~/.pi-work ",
+            customModels: ["openai/gpt-5-nano"],
+          },
+        },
+      }).providers?.pi,
+    ).toEqual({
+      binaryPath: "/opt/bin/pi",
+      homePath: "~/.pi-work",
+      customModels: ["openai/gpt-5-nano"],
+    });
   });
 });
 
@@ -660,6 +729,66 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
+describe("ServerSettings.modelBackendConnections", () => {
+  it("defaults to no connections when absent", () => {
+    expect(decodeServerSettings({}).modelBackendConnections).toEqual({});
+  });
+
+  it("decodes a map with named connections", () => {
+    const decoded = decodeServerSettings({
+      modelBackendConnections: {
+        "main-proxy": {
+          baseUrl: "http://127.0.0.1:20128/v1",
+          apiKeyEnv: "OMNIROUTE_API_KEY",
+          displayName: "Omniroute",
+        },
+      },
+    });
+    expect(
+      decoded.modelBackendConnections[ModelBackendConnectionId.make("main-proxy")]?.baseUrl,
+    ).toContain("20128");
+  });
+
+  it("decodes an explicit empty map as no connections", () => {
+    expect(decodeServerSettings({ modelBackendConnections: {} }).modelBackendConnections).toEqual(
+      {},
+    );
+  });
+
+  it("rejects a connection without baseUrl", () => {
+    expect(() => decodeServerSettings({ modelBackendConnections: { proxy: {} } })).toThrow();
+    expect(() =>
+      decodeServerSettings({ modelBackendConnections: { proxy: { baseUrl: "   " } } }),
+    ).toThrow();
+  });
+
+  it("rejects connection keys that violate the slug pattern", () => {
+    expect(() =>
+      decodeServerSettings({
+        modelBackendConnections: { "1bad": { baseUrl: "http://127.0.0.1:20128/v1" } },
+      }),
+    ).toThrow();
+  });
+
+  it("ignores a legacy global modelProxy field (unreleased feature, no migration)", () => {
+    const decoded = decodeServerSettings({
+      modelProxy: { baseUrl: "http://127.0.0.1:20128/v1" },
+    }) as unknown as Record<string, unknown>;
+    expect(decoded["modelProxy"]).toBeUndefined();
+    expect(decodeServerSettings({}).modelBackendConnections).toEqual({});
+  });
+
+  it("accepts modelBackendConnections patches as a whole-map replacement", () => {
+    const set = decodeServerSettingsPatch({
+      modelBackendConnections: { "main-proxy": { baseUrl: "http://127.0.0.1:20128/v1" } },
+    });
+    expect(
+      set.modelBackendConnections?.[ModelBackendConnectionId.make("main-proxy")]?.baseUrl,
+    ).toContain("20128");
+    expect(decodeServerSettingsPatch({}).modelBackendConnections).toBeUndefined();
+  });
+});
+
 describe("provider enabled defaults", () => {
   it("enables only the stable bindings by default", () => {
     const decoded = decodeServerSettings({});
@@ -667,6 +796,7 @@ describe("provider enabled defaults", () => {
     expect(decoded.providers.claudeAgent.enabled).toBe(true);
     expect(decoded.providers.cursor.enabled).toBe(false);
     expect(decoded.providers.grok.enabled).toBe(false);
+    expect(decoded.providers.zcode.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);
   });
 

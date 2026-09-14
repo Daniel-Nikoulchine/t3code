@@ -47,6 +47,7 @@ import {
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
@@ -104,7 +105,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
   },
   configSchema: ClaudeSettings,
   defaultConfig: (): ClaudeSettings => decodeClaudeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -115,7 +116,25 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const eventLoggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
       const modelCatalog = modelManifest.current.pipe(Effect.map(resolveClaudeModelCatalog));
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // The Claude Agent SDK spawns the CLI with the env passed to `query`, so
+      // the backend overlay (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY) reaches the
+      // harness by merging it here. Without a backend the overlay is empty and
+      // subscription mode is untouched.
+      const processEnv = {
+        ...mergeProviderInstanceEnvironment(environment),
+        ...resolveModelBackendEnvironment(backend, process.env),
+      };
+      // Only an endpoint speaking the Anthropic wire protocol can serve this
+      // driver; the env overlay already refuses ANTHROPIC_* for the rest.
+      // Connection models ride the custom-model path: providerModelsFromSettings
+      // appends them to the snapshot list and the adapter's catalog scoping
+      // leaves capability-less entries alone.
+      const backendModels =
+        backend === undefined || backend.kind === "native"
+          ? []
+          : (backend.protocols ?? ["openai", "anthropic"]).includes("anthropic")
+            ? (backend.models ?? [])
+            : [];
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -124,6 +143,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         ...config,
         enabled,
         binaryPath: expandHomePath(config.binaryPath),
+        ...(backendModels.length > 0
+          ? { customModels: [...config.customModels, ...backendModels] }
+          : {}),
       } satisfies ClaudeSettings;
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
@@ -142,6 +164,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey,
+        ...(backend === undefined ? {} : { backend }),
       });
 
       // One per instance: the status probe writes the model-scoped bucket

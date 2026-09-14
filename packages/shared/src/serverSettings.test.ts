@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  ModelBackendConnectionId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -474,6 +475,61 @@ describe("serverSettings helpers", () => {
       enabled: true,
       config: { homePath: "~/.codex" },
     });
+  });
+
+  it("replaces modelBackendConnections atomically as a whole map", () => {
+    const connA = ModelBackendConnectionId.make("proxy-a");
+    const connB = ModelBackendConnectionId.make("proxy-b");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      modelBackendConnections: {
+        [connA]: {
+          baseUrl: "http://127.0.0.1:20128/v1",
+          apiKeyEnv: "OLD_KEY",
+          protocols: ["openai", "anthropic"] as const,
+        },
+        [connB]: {
+          baseUrl: "http://127.0.0.1:20130/v1",
+          protocols: ["openai", "anthropic"] as const,
+        },
+      },
+    };
+    const updated = applyServerSettingsPatch(current, {
+      modelBackendConnections: {
+        [connA]: {
+          baseUrl: "http://127.0.0.1:20129/v1",
+          protocols: ["openai", "anthropic"] as const,
+        },
+      },
+    });
+    // Whole-map replacement like providerInstances: the omitted connection
+    // is dropped and omitted fields of the kept one are cleared, not merged.
+    expect(updated.modelBackendConnections).toEqual({
+      [connA]: {
+        baseUrl: "http://127.0.0.1:20129/v1",
+        protocols: ["openai", "anthropic"] as const,
+      },
+    });
+  });
+
+  it("clears modelBackendConnections with an empty map and leaves it untouched when omitted", () => {
+    const connA = ModelBackendConnectionId.make("proxy-a");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      modelBackendConnections: {
+        [connA]: {
+          baseUrl: "http://127.0.0.1:20128/v1",
+          apiKeyEnv: "OLD_KEY",
+          protocols: ["openai", "anthropic"] as const,
+        },
+      },
+    };
+    expect(
+      applyServerSettingsPatch(current, { modelBackendConnections: {} }).modelBackendConnections,
+    ).toEqual({});
+    expect(applyServerSettingsPatch(current, {}).modelBackendConnections).toEqual(
+      current.modelBackendConnections,
+    );
   });
 
   it("upserts and removes usageLimitSources per entry so concurrent edits cannot clobber", () => {

@@ -68,6 +68,11 @@ export interface SettingsSearchAvailability {
 /**
  * Section labels in sidebar order. The sidebar nav and the search-result
  * subtitles both render from this record, so each label exists once.
+ *
+ * The providers/harness split is consolidated: `/settings/providers` owns all
+ * provider settings (connections, API keys, models, instances) under one
+ * "Providers" label; `/settings/harness` survives only as a redirecting route
+ * for old deep links and is intentionally absent here.
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/projects": "Project",
@@ -287,7 +292,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "provider-update-checks",
     title: "Provider update checks",
     to: "/settings/general",
-    searchTerms: ["installed cli versions newer available codex claude cursor grok opencode"],
+    searchTerms: [
+      "installed cli versions newer available codex claude cursor devin droid grok copilot opencode",
+    ],
     scope: "environment-defaults",
   },
   {
@@ -444,11 +451,47 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "providers",
+    title: "Provider instances",
+    to: "/settings/providers",
+    searchTerms: [
+      "provider instances harness agents cli codex claude cursor devin droid grok copilot opencode openclaw antigravity google sign in sign out install subscription authentication api key models configuration binary path config directory endpoint gateway token session arguments environment variables display name accent color custom favorite hidden auto compact fallback combo reroute use provider direct connection select proxy",
+    ],
+  },
+  {
+    id: "provider-backends",
     title: "Providers",
     to: "/settings/providers",
     searchTerms: [
-      "agents cli codex claude cursor grok opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "model backend provider connections connection connection id openai-compatible base url api key variable external backend display name via provider connected direct add remove test template preset presets provider list proxy global via proxy",
     ],
+    providerSettingsOnly: true,
+  },
+  {
+    id: "provider-credentials",
+    title: "API keys",
+    to: "/settings/providers",
+    searchTerms: [
+      "stored api keys credentials vendor anthropic openai google gemini deepseek xai custom secret last four test add remove edit",
+    ],
+    providerSettingsOnly: true,
+  },
+  {
+    id: "model-catalog",
+    title: "Models",
+    to: "/settings/providers",
+    searchTerms: [
+      "models matrix catalog logical model instances sources gaps needs api key vendor locked subscription protocol",
+    ],
+    providerSettingsOnly: true,
+  },
+  {
+    id: "model-router",
+    title: "Model routing",
+    to: "/settings/providers",
+    searchTerms: [
+      "model router routing rules route logical model id upstream target vendor connection api key translate openai anthropic built-in",
+    ],
+    providerSettingsOnly: true,
   },
   {
     id: "usage-providers",

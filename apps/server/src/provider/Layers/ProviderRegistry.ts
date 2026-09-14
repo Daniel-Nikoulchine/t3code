@@ -34,6 +34,7 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -43,6 +44,7 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
+import * as BackendLastVerified from "../backendLastVerified.ts";
 import {
   hydrateCachedProvider,
   isCachedProviderCorrelated,
@@ -416,6 +418,23 @@ export const ProviderRegistryLive = Layer.effect(
       };
     });
 
+    // Volatile verification marker, projected the same way as the update
+    // state above: this aggregator is the single funnel every live snapshot
+    // (managed drivers for OpenCode, ACP, and the rest alike) passes
+    // through, so stamping here reaches all of them without per-driver
+    // code. Optional like every other cross-cutting read: layers built
+    // without the tracker (older tests, partial harnesses) publish
+    // unstamped snapshots instead of failing.
+    const backendVerified = yield* Effect.serviceOption(BackendLastVerified.BackendLastVerified);
+    const applyBackendLastVerified = Effect.fn("applyBackendLastVerified")(function* (
+      provider: ServerProvider,
+    ) {
+      if (Option.isNone(backendVerified)) {
+        return provider;
+      }
+      return yield* backendVerified.value.stamp(provider);
+    });
+
     const upsertProviders = Effect.fn("upsertProviders")(function* (
       nextProviders: ReadonlyArray<ServerProvider>,
       options?: {
@@ -426,7 +445,11 @@ export const ProviderRegistryLive = Layer.effect(
     ) {
       const nextProvidersWithUpdateState = yield* Effect.forEach(
         nextProviders,
-        applyProviderUpdateState,
+        (provider) =>
+          Effect.gen(function* () {
+            const withUpdateState = yield* applyProviderUpdateState(provider);
+            return yield* applyBackendLastVerified(withUpdateState);
+          }),
         {
           concurrency: "unbounded",
         },

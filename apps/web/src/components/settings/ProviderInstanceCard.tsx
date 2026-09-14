@@ -16,12 +16,11 @@ import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  isProviderDriverKind,
   resolveProviderInstanceEnabled,
+  T3_ROUTER_CONNECTION_ID,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
-  type ProviderDriverKind,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -31,6 +30,7 @@ import {
   readCustomModelEntries,
   toCustomModelSetting,
 } from "@t3tools/shared/model";
+import type { ModelProxyConfig } from "@t3tools/contracts";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
@@ -44,10 +44,18 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { DriverOption } from "./providerDriverMeta";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
-import { ProviderInstanceIcon, providerInstanceInitials } from "../chat/ProviderInstanceIcon";
+import {
+  ProviderInstanceTitleIcon,
+  resolveProviderInstanceTitle,
+} from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+import {
+  nextInstanceWithConnectionId,
+  resolveInstanceConnectionState,
+} from "./providerBackend.logic";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -109,6 +117,17 @@ function providerEnvironmentsEqual(
 function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
   if (config === null || typeof config !== "object") return [];
   return readCustomModelEntries((config as Record<string, unknown>).customModels);
+}
+
+/**
+ * Read `shadowHomePath` from the opaque config blob (codex instances keep
+ * their per-account home there; see `CodexSettings` in contracts). Absent,
+ * non-string, or blank reads as unset.
+ */
+function readConfigShadowHomePath(config: unknown): string {
+  if (config === null || typeof config !== "object" || !("shadowHomePath" in config)) return "";
+  const value = (config as Record<string, unknown>).shadowHomePath;
+  return typeof value === "string" ? value.trim() : "";
 }
 
 /**
@@ -347,6 +366,84 @@ function ProviderEnvironmentSection(props: {
   );
 }
 
+const DIRECT_CONNECTION_VALUE = "direct";
+
+/**
+ * Label for the built-in routing entry. The registry injects the local
+ * translation proxy under `T3_ROUTER_CONNECTION_ID` when an instance opts
+ * in — it claims no endpoint here, so the label names the capability only.
+ */
+const BUILT_IN_ROUTER_LABEL = "Built-in routing (T3 Router)";
+
+/**
+ * Harness routing selection: Direct, the built-in T3 Router, plus every
+ * named connection on the environment. Persists through the whole-map
+ * instance patch (same pattern as `updateDisplayName`). A `connectionId`
+ * whose entry is gone (deleted connection) routes natively — the row warns
+ * in the plain style of the old no-provider hint, and picking anything
+ * clears the orphan. The built-in router is not a settings entry, so it
+ * never reads as one.
+ */
+function ProviderConnectionRow({
+  instance,
+  connections,
+  displayName,
+  onSelect,
+}: {
+  readonly instance: ProviderInstanceConfig;
+  readonly connections: Readonly<Record<string, ModelProxyConfig>>;
+  readonly displayName: string;
+  readonly onSelect: (connectionId: string | null) => void;
+}) {
+  const state = resolveInstanceConnectionState(instance, connections);
+  const entries = Object.entries(connections);
+  const selectedLabel =
+    state.kind === "connected"
+      ? state.connectionId === T3_ROUTER_CONNECTION_ID
+        ? BUILT_IN_ROUTER_LABEL
+        : connections[state.connectionId]?.displayName?.trim() || state.connectionId
+      : "Direct";
+  return (
+    <SettingsRow
+      title="Provider"
+      description="Route this harness through a provider connection instead of its own login."
+      control={
+        <Select
+          value={state.kind === "connected" ? state.connectionId : DIRECT_CONNECTION_VALUE}
+          onValueChange={(next) => {
+            if (typeof next !== "string") return;
+            onSelect(next === DIRECT_CONNECTION_VALUE ? null : next);
+          }}
+        >
+          <SelectTrigger
+            size="sm"
+            className="w-full sm:w-56"
+            aria-label={`Provider connection for ${displayName}`}
+          >
+            <SelectValue>{selectedLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="start" alignItemWithTrigger={false}>
+            <SelectItem value={DIRECT_CONNECTION_VALUE}>Direct</SelectItem>
+            <SelectItem value={T3_ROUTER_CONNECTION_ID}>{BUILT_IN_ROUTER_LABEL}</SelectItem>
+            {entries.map(([connectionId, connection]) => (
+              <SelectItem key={connectionId} value={connectionId}>
+                {connection.displayName?.trim() || connectionId}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      }
+      status={
+        state.kind === "orphan" ? (
+          <span>Provider deleted — pick another connection.</span>
+        ) : entries.length === 0 ? (
+          <span>No provider configured — set one up under Settings → Providers.</span>
+        ) : null
+      }
+    />
+  );
+}
+
 interface ProviderInstanceCardProps {
   readonly instanceId: ProviderInstanceId;
   readonly instance: ProviderInstanceConfig;
@@ -381,6 +478,12 @@ interface ProviderInstanceCardProps {
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onRunUpdate?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
+  /**
+   * The environment's `ServerSettings.modelBackendConnections` for the
+   * provider selection below. Absent/empty reads as no connections: the card
+   * points at Settings → Providers instead of offering a choice.
+   */
+  readonly connections?: Readonly<Record<string, ModelProxyConfig>> | undefined;
 }
 
 /**
@@ -423,6 +526,7 @@ export function ProviderInstanceCard({
   onModelOrderChange,
   onRunUpdate,
   isUpdating = false,
+  connections,
 }: ProviderInstanceCardProps) {
   const enabled = resolveProviderInstanceEnabled(instance);
   // A locally disabled provider reads "Disabled" with a muted dot even if its
@@ -443,10 +547,12 @@ export function ProviderInstanceCard({
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
   const updateCommand = versionAdvisory?.updateCommand ?? null;
-  const FallbackIconComponent = driverOption?.icon;
-  const displayName =
-    instance.displayName?.trim() || driverOption?.label || String(instance.driver);
-  const accentColor = normalizeProviderAccentColor(instance.accentColor);
+  const { displayName, accentColor, driverKind } = resolveProviderInstanceTitle({
+    displayName: instance.displayName,
+    driverLabel: driverOption?.label,
+    driver: instance.driver,
+    accentColor: instance.accentColor,
+  });
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
       toastManager.add({
@@ -466,13 +572,10 @@ export function ProviderInstanceCard({
     },
   });
 
-  // Narrow `instance.driver` for callers that key on the closed
-  // `ProviderDriverKind` union (e.g. `normalizeModelSlug`'s alias table). Custom
-  // fork drivers pass through as `null` and those callers fall back to
-  // verbatim behaviour.
-  const driverKind: ProviderDriverKind | null = isProviderDriverKind(instance.driver)
-    ? instance.driver
-    : null;
+  // `driverKind` narrows `instance.driver` for callers that key on the
+  // closed `ProviderDriverKind` union (e.g. `normalizeModelSlug`'s alias
+  // table). Custom fork drivers pass through as `null` and those callers
+  // fall back to verbatim behaviour.
   const customModels =
     instance.driver === "antigravity" ? [] : readConfigCustomModels(instance.config);
   // Server-returned models may lag behind settings writes. Treat probe
@@ -535,27 +638,26 @@ export function ProviderInstanceCard({
     );
   };
 
-  const titleIconNode = driverKind ? (
-    <ProviderInstanceIcon
-      driverKind={driverKind}
+  const updateConnectionId = (value: string | null) => {
+    onUpdate(nextInstanceWithConnectionId(instance, value));
+  };
+
+  // Codex only honors a routed connection through its shadow-home overlay;
+  // without one it keeps talking to its native endpoint. A hint, not a
+  // blocker — the connection stays selectable and routing still applies to
+  // every other driver.
+  const showCodexShadowHomeHint =
+    instance.driver === "codex" &&
+    instance.connectionId !== undefined &&
+    readConfigShadowHomePath(instance.config).length === 0;
+
+  const titleIconNode = (
+    <ProviderInstanceTitleIcon
       displayName={displayName}
       accentColor={accentColor}
-      showBadge={Boolean(accentColor)}
-      className="size-5"
-      iconClassName="size-4 text-foreground/80"
-      badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
+      driverKind={driverKind}
+      fallbackIcon={driverOption?.icon}
     />
-  ) : FallbackIconComponent ? (
-    <span className="inline-flex size-5 shrink-0 items-center justify-center">
-      <FallbackIconComponent className="size-4 text-foreground/80" aria-hidden />
-    </span>
-  ) : (
-    <span
-      className="inline-flex size-5 shrink-0 items-center justify-center text-[10px] font-semibold leading-none text-foreground/80"
-      aria-hidden
-    >
-      {providerInstanceInitials(displayName)}
-    </span>
   );
 
   const titleTailNode = headerAction ? (
@@ -912,6 +1014,26 @@ export function ProviderInstanceCard({
           </div>
         </SettingsSection>
       ) : null}
+
+      <SettingsSection
+        title="Provider"
+        inert={readOnly}
+        aria-disabled={readOnly || undefined}
+        className={readOnly ? "opacity-50 select-none" : undefined}
+      >
+        <ProviderConnectionRow
+          instance={instance}
+          connections={connections ?? {}}
+          displayName={displayName}
+          onSelect={updateConnectionId}
+        />
+        {showCodexShadowHomeHint ? (
+          <p className="px-3 pb-3 text-[13px] leading-[1.45] text-warning sm:px-4">
+            Codex routing needs a shadow home — set Shadow home path under Runtime, otherwise Codex
+            keeps talking to its native endpoint.
+          </p>
+        ) : null}
+      </SettingsSection>
     </>
   );
 }

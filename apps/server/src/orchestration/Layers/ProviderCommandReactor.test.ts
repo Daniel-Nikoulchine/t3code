@@ -883,6 +883,57 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  it("attaches the thread fallback combo to the provider send-turn request", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const combo = {
+      targets: [
+        { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        { instanceId: ProviderInstanceId.make("codex_proxy"), model: "gpt-5" },
+      ],
+      strategy: "priority" as const,
+      fallbackOn: ["rate-limit", "provider-error"] as const,
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-turn-combo-set"),
+        threadId: ThreadId.make("thread-1"),
+        combo,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-with-combo"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-with-combo"),
+          role: "user",
+          text: "hello combo",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.make("thread-1"),
+      combo: {
+        strategy: "priority",
+        targets: [
+          { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          { instanceId: ProviderInstanceId.make("codex_proxy"), model: "gpt-5" },
+        ],
+      },
+    });
+  });
+
   effectIt.effect("projects inline context before sending the provider turn", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() => createHarness());

@@ -1,5 +1,7 @@
 import type {
   EnvironmentId,
+  FallbackCombo,
+  FallbackStrategy,
   ModelSelection,
   ProviderInstanceId,
   ProviderOptionDescriptor,
@@ -21,6 +23,13 @@ import {
 } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import {
+  addComboTarget,
+  comboModeForThread,
+  MAX_FALLBACK_COMBO_TARGETS,
+  removeComboTarget,
+  setComboStrategy,
+} from "@t3tools/client-runtime/state/fallback-combo";
+import {
   createContext,
   use,
   useCallback,
@@ -39,7 +48,7 @@ import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { ThemedSwitch } from "../../components/ThemedSwitch";
 import { cn } from "../../lib/cn";
-import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
+import type { ModelGroup, ModelOption } from "../../lib/modelOptions";
 import { applyProviderOptionSelection } from "../../lib/providerOptions";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -68,6 +77,7 @@ import {
   modelMatchesCatalogQuery,
   pendingModelAfterPress,
   providerSectionIsCollapsed,
+  resolveComboTargetDisplay,
 } from "./thread-settings-sheet-state";
 
 /**
@@ -78,8 +88,11 @@ import {
 const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
   "codex",
+  "droid",
   "hermes",
+  "cline",
   "antigravity",
+  "pi",
 ]);
 /**
  * Keep measured row changes stable, but let catalog mutations use the list's
@@ -101,6 +114,11 @@ const THREAD_SETTINGS_HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects
 );
 function ModelRow(props: {
   readonly option: ModelOption;
+  /**
+   * The pairing's provider label, shown when the surrounding model-first
+   * group pools several of them — rows would otherwise be indistinguishable.
+   */
+  readonly providerLabel?: string;
   readonly selected: boolean;
   readonly onPress: () => void;
   readonly isFirst: boolean;
@@ -108,9 +126,14 @@ function ModelRow(props: {
 }) {
   const { materialYouStyleLayoutActive } = useAppearancePreferences();
   const selectedMaterialRow = materialYouStyleLayoutActive && props.selected;
+  const proxyHint = props.option.viaProxy
+    ? `via provider${props.option.backendLabel ? `, ${props.option.backendLabel}` : ""}`
+    : null;
   return (
     <Pressable
-      accessibilityLabel={[props.option.label, props.option.subtitle].filter(Boolean).join(", ")}
+      accessibilityLabel={[props.option.label, props.option.subtitle, proxyHint]
+        .filter(Boolean)
+        .join(", ")}
       accessibilityRole="radio"
       accessibilityState={{
         checked: props.selected,
@@ -143,6 +166,18 @@ function ModelRow(props: {
               <Text className="text-3xs font-t3-bold text-foreground-muted">Legacy</Text>
             </View>
           ) : null}
+          {props.option.viaProxy ? (
+            <View className="rounded-md bg-subtle px-1.5 py-0.5">
+              <Text className="text-3xs font-t3-bold text-foreground-muted">via provider</Text>
+            </View>
+          ) : null}
+          {props.providerLabel ? (
+            <View className="rounded-md bg-subtle px-1.5 py-0.5">
+              <Text className="text-3xs font-t3-bold text-foreground-muted" numberOfLines={1}>
+                {props.providerLabel}
+              </Text>
+            </View>
+          ) : null}
           {props.option.isUnavailable ? (
             <Text className="text-xs text-foreground">Unavailable</Text>
           ) : null}
@@ -150,6 +185,11 @@ function ModelRow(props: {
         {props.option.subtitle ? (
           <Text className="text-xs text-foreground-muted" numberOfLines={1}>
             {props.option.subtitle}
+          </Text>
+        ) : null}
+        {props.option.viaProxy && props.option.capabilitiesDegraded ? (
+          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+            Capabilities degraded
           </Text>
         ) : null}
       </View>
@@ -166,7 +206,10 @@ function ModelRow(props: {
   );
 }
 
-/** Provider catalog header with its harness logo and disclosure state. */
+/**
+ * Model-first group header: the pooled logical model's name, with the count
+ * of concrete pairings while collapsed. Rows beneath it are the pairings.
+ */
 function ProviderHeader(props: {
   readonly driver: string | undefined;
   readonly label: string;
@@ -178,7 +221,12 @@ function ProviderHeader(props: {
   const content = (
     <>
       <ProviderIcon provider={props.driver} size={15} />
-      <Text className="text-sm font-t3-medium text-foreground-muted">{props.label}</Text>
+      <Text
+        className="min-w-0 shrink text-sm font-t3-medium text-foreground-muted"
+        numberOfLines={1}
+      >
+        {props.label}
+      </Text>
       {props.collapsible ? (
         <>
           <View className="flex-1" />
@@ -315,14 +363,48 @@ function SwitchRow(props: {
 
 type ThreadSettingsSubmenuPage =
   | { readonly kind: "descriptor"; readonly id: string }
-  | { readonly kind: "runtime" };
+  | { readonly kind: "runtime" }
+  | { readonly kind: "combo-strategy" };
+
+const COMBO_STRATEGY_CHOICES: ReadonlyArray<{
+  readonly value: FallbackStrategy;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    value: "priority",
+    label: "Priority",
+    description: "Try targets in order, top first.",
+  },
+  {
+    value: "headroom",
+    label: "Headroom",
+    description: "Prefer the target with the most remaining quota.",
+  },
+  {
+    value: "lkgp",
+    label: "Last known good",
+    description: "Stick with the last target that worked.",
+  },
+];
+
+function comboStrategyLabel(strategy: FallbackStrategy): string {
+  return COMBO_STRATEGY_CHOICES.find((choice) => choice.value === strategy)?.label ?? strategy;
+}
 
 type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
   readonly providerInstanceId?: ProviderInstanceId;
-  readonly providerGroups: ReadonlyArray<ProviderGroup>;
+  readonly providerGroups: ReadonlyArray<ModelGroup>;
   readonly selectedModel: ModelSelection | null;
   readonly onSelectModel: (option: ModelOption) => void;
+  /**
+   * The thread's fallback combo. Absent (no `onSelectCombo`) means the host
+   * cannot persist one — new-task drafts hide the combo section, only
+   * server-backed threads offer it.
+   */
+  readonly combo?: FallbackCombo | null;
+  readonly onSelectCombo?: (combo: FallbackCombo | null) => void;
   readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
@@ -373,13 +455,18 @@ export function useExistingThreadSettingsRoutePresentation() {
 type ThreadSettingsSessionValue = {
   readonly environmentId: EnvironmentId | null;
   readonly providerInstanceId?: ProviderInstanceId;
-  readonly providerGroups: ReadonlyArray<ProviderGroup>;
+  readonly providerGroups: ReadonlyArray<ModelGroup>;
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly providerExpansionOverrides: ReadonlySet<string>;
   readonly hasLegacyModels: boolean;
   readonly pendingModel: ModelOption | null;
+  /** Staged fallback combo; committed together with the model on Save. */
+  readonly pendingCombo: FallbackCombo | null;
+  /** False for hosts without a thread to persist the combo on (drafts). */
+  readonly comboSupported: boolean;
+  readonly hasPendingChanges: boolean;
   readonly providerFilter: string | null;
   readonly searchQuery: string;
   readonly showLegacy: boolean;
@@ -388,6 +475,10 @@ type ThreadSettingsSessionValue = {
   readonly isApplied: (option: ModelOption) => boolean;
   readonly isDisplayed: (option: ModelOption) => boolean;
   readonly pressModel: (option: ModelOption) => void;
+  readonly setComboEnabled: (enabled: boolean) => void;
+  readonly removeComboTargetAt: (index: number) => void;
+  readonly updateComboStrategy: (strategy: FallbackStrategy) => void;
+  readonly clearCombo: () => void;
   readonly setProviderFilter: (providerKey: string | null) => void;
   readonly setSearchQuery: (query: string) => void;
   readonly setShowLegacy: (showLegacy: boolean) => void;
@@ -407,6 +498,14 @@ function ThreadSettingsSessionProvider(
     () => new Set(),
   );
   const [pendingModel, setPendingModel] = useState<ModelOption | null>(null);
+  // Combo edits stage exactly like the model: taps mutate `pendingCombo`,
+  // Save commits it through `onSelectCombo`. No parallel save path.
+  // `initialCombo` is render state (not a ref) so the dirty check below
+  // never reads a ref during render.
+  const comboSupported = props.onSelectCombo !== undefined;
+  const [initialCombo] = useState<FallbackCombo | null>(() => props.combo ?? null);
+  const [pendingCombo, setPendingCombo] = useState<FallbackCombo | null>(() => props.combo ?? null);
+  const hasPendingComboChanges = comboSupported && pendingCombo !== initialCombo;
 
   const isApplied = useCallback(
     (option: ModelOption) =>
@@ -452,8 +551,18 @@ function ThreadSettingsSessionProvider(
       void Haptics.selectionAsync();
       props.onSelectModel(pendingModel);
     }
+    if (hasPendingComboChanges) {
+      props.onSelectCombo?.(pendingCombo);
+    }
     return true;
-  }, [pendingModel, props.onSelectModel, props.providerGroups]);
+  }, [
+    hasPendingComboChanges,
+    pendingCombo,
+    pendingModel,
+    props.onSelectCombo,
+    props.onSelectModel,
+    props.providerGroups,
+  ]);
 
   const applyOptionChange = useCallback(
     (id: string, value: string | boolean) => {
@@ -486,6 +595,12 @@ function ThreadSettingsSessionProvider(
   const pressModel = useCallback(
     (option: ModelOption) => {
       void Haptics.selectionAsync();
+      // In combo mode the catalog is the target picker: tapping adds the
+      // model as a fallback target instead of staging a single selection.
+      if (comboSupported && comboModeForThread(pendingCombo) === "combo") {
+        setPendingCombo((current) => addComboTarget(current, option.selection) ?? current);
+        return;
+      }
       setPendingModel((current) =>
         pendingModelAfterPress({
           current,
@@ -494,8 +609,44 @@ function ThreadSettingsSessionProvider(
         }),
       );
     },
-    [isApplied],
+    [comboSupported, isApplied, pendingCombo],
   );
+
+  const setComboEnabled = useCallback(
+    (enabled: boolean) => {
+      void Haptics.selectionAsync();
+      if (!enabled) {
+        setPendingCombo(null);
+        return;
+      }
+      const seed = pendingModel?.selection ?? props.selectedModel;
+      if (!seed) {
+        return;
+      }
+      setPendingCombo((current) => addComboTarget(current, seed) ?? current);
+    },
+    [pendingModel, props.selectedModel],
+  );
+
+  const removeComboTargetAt = useCallback((index: number) => {
+    void Haptics.selectionAsync();
+    setPendingCombo((current) => {
+      const next = removeComboTarget(current, index);
+      // `undefined` leaves the combo untouched (out-of-range tap);
+      // `null` collapses back to single when one target remains.
+      return next === undefined ? current : next;
+    });
+  }, []);
+
+  const updateComboStrategy = useCallback((strategy: FallbackStrategy) => {
+    void Haptics.selectionAsync();
+    setPendingCombo((current) => setComboStrategy(current, strategy));
+  }, []);
+
+  const clearCombo = useCallback(() => {
+    void Haptics.selectionAsync();
+    setPendingCombo(null);
+  }, []);
 
   const value = useMemo<ThreadSettingsSessionValue>(
     () => ({
@@ -508,6 +659,9 @@ function ThreadSettingsSessionProvider(
       providerExpansionOverrides,
       hasLegacyModels,
       pendingModel,
+      pendingCombo,
+      comboSupported,
+      hasPendingChanges: pendingModel !== null || hasPendingComboChanges,
       providerFilter,
       searchQuery,
       showLegacy: showLegacyToggle,
@@ -516,6 +670,10 @@ function ThreadSettingsSessionProvider(
       isApplied,
       isDisplayed,
       pressModel,
+      setComboEnabled,
+      removeComboTargetAt,
+      updateComboStrategy,
+      clearCombo,
       setProviderFilter,
       setSearchQuery,
       setShowLegacy: setShowLegacyToggle,
@@ -523,16 +681,23 @@ function ThreadSettingsSessionProvider(
     }),
     [
       applyOptionChange,
+      clearCombo,
+      comboSupported,
       commitPendingModel,
       displayedDescriptors,
       providerExpansionOverrides,
       hasLegacyModels,
+      hasPendingComboChanges,
       isApplied,
       isDisplayed,
       props.environmentId,
       props.providerInstanceId,
+      pendingCombo,
       pendingModel,
       pressModel,
+      setComboEnabled,
+      removeComboTargetAt,
+      updateComboStrategy,
       providerFilter,
       props.onUpdateRuntimeMode,
       props.providerGroups,
@@ -558,6 +723,11 @@ function useThreadSettingsSession() {
   return value;
 }
 
+/**
+ * One model-first group in the picker: a pooled logical model and its
+ * concrete pairings. `driver` comes from the first pairing so the header
+ * keeps a recognizable glyph.
+ */
 type ThreadSettingsProviderCatalog = {
   readonly key: string;
   readonly driver: string | undefined;
@@ -570,6 +740,10 @@ type ThreadSettingsProviderCatalog = {
 
 type ThreadSettingsCatalogItem =
   | {
+      readonly kind: "combo";
+      readonly key: "combo";
+    }
+  | {
       readonly kind: "provider";
       readonly key: string;
       readonly provider: ThreadSettingsProviderCatalog;
@@ -578,6 +752,8 @@ type ThreadSettingsCatalogItem =
       readonly kind: "model";
       readonly key: string;
       readonly option: ModelOption;
+      /** Set when the group pools several pairings and rows need their provider. */
+      readonly providerLabel?: string;
       readonly isFirst: boolean;
       readonly isLast: boolean;
     }
@@ -592,6 +768,7 @@ type ThreadSettingsCatalogItem =
 
 function ThreadSettingsModelListRow(props: {
   readonly option: ModelOption;
+  readonly providerLabel?: string;
   readonly isFirst: boolean;
   readonly isLast: boolean;
 }) {
@@ -607,6 +784,7 @@ function ThreadSettingsModelListRow(props: {
       isLast={props.isLast}
       onPress={onPress}
       option={props.option}
+      providerLabel={props.providerLabel}
       selected={session.isDisplayed(props.option)}
     />
   );
@@ -639,17 +817,22 @@ function useThreadSettingsCatalogItems(
   return useMemo(
     () =>
       session.providerGroups.flatMap((group) => {
-        if (session.providerFilter !== null && group.providerKey !== session.providerFilter) {
+        // The provider filter narrows pooled groups to those the chosen
+        // provider instance can actually serve.
+        if (
+          session.providerFilter !== null &&
+          !group.models.some((model) => model.providerKey === session.providerFilter)
+        ) {
           return [];
         }
-        const driver = group.models[0]?.providerDriver ?? group.providerKey;
+        const driver = group.models[0]?.providerDriver ?? group.key;
         const catalogModels = session.showLegacy
           ? group.models
           : group.models.filter((model) => !model.isLegacy || session.isDisplayed(model));
         const visibleModels = catalogModels.filter((model) =>
           modelMatchesCatalogQuery({
             model,
-            providerLabel: group.providerLabel,
+            groupLabel: group.label,
             query: session.searchQuery,
           }),
         );
@@ -665,28 +848,32 @@ function useThreadSettingsCatalogItems(
         const collapsible = !isNarrowed;
         const collapsed = providerSectionIsCollapsed({
           defaultExpanded: isPrimary || containsAppliedSelection,
-          hasExpansionOverride: session.providerExpansionOverrides.has(group.providerKey),
+          hasExpansionOverride: session.providerExpansionOverrides.has(group.key),
           isNarrowed,
         });
         const provider: ThreadSettingsProviderCatalog = {
-          key: group.providerKey,
+          key: group.key,
           driver,
-          label: group.providerLabel,
+          label: group.label,
           collapsible,
           collapsed,
           modelCount: visibleModels.length,
           models: collapsed ? [] : visibleModels,
         };
+        // A pooled group's rows need their provider to be distinguishable;
+        // a single-pairing group already says everything through the header.
+        const showProvider = group.models.length > 1;
         return [
           {
             kind: "provider" as const,
-            key: `provider:${group.providerKey}`,
+            key: `provider:${group.key}`,
             provider,
           },
           ...provider.models.map((option, index) => ({
             kind: "model" as const,
             key: `model:${option.key}`,
             option,
+            ...(showProvider ? { providerLabel: option.providerLabel } : {}),
             isFirst: index === 0,
             isLast: index === provider.models.length - 1,
           })),
@@ -701,6 +888,121 @@ function useThreadSettingsCatalogItems(
       session.searchQuery,
       session.showLegacy,
     ],
+  );
+}
+
+/**
+ * Thread-level turn fallback: single model vs. an ordered combo of up to
+ * `MAX_FALLBACK_COMBO_TARGETS` targets with a strategy. Targets reuse the
+ * catalog below — in combo mode tapping a model adds it instead of staging
+ * a single selection. Everything stages into `pendingCombo` and commits on
+ * Save; nothing persists on tap.
+ */
+function ThreadSettingsComboSection(props: {
+  readonly onOpenSubmenu: (submenu: ThreadSettingsSubmenuPage) => void;
+}) {
+  const session = useThreadSettingsSession();
+  const mode = comboModeForThread(session.pendingCombo);
+  const targets = session.pendingCombo?.targets ?? [];
+  const strategy = session.pendingCombo?.strategy ?? "priority";
+
+  return (
+    <View>
+      <Text className="px-5 pb-2 pt-2 text-sm font-t3-medium text-foreground-muted">Fallback</Text>
+      <View className="mx-4 overflow-hidden rounded-2xl bg-card">
+        <View className="flex-row gap-2 p-2">
+          <Pressable
+            accessibilityRole="radio"
+            accessibilityState={{ checked: mode === "single" }}
+            onPress={() => session.setComboEnabled(false)}
+            className={cn(
+              "min-h-11 flex-1 items-center justify-center rounded-xl px-4 active:opacity-60",
+              mode === "single" ? "bg-subtle-strong" : "bg-card",
+            )}
+          >
+            <Text className="text-sm font-t3-medium text-foreground">Single</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="radio"
+            accessibilityState={{ checked: mode === "combo" }}
+            onPress={() => session.setComboEnabled(true)}
+            className={cn(
+              "min-h-11 flex-1 items-center justify-center rounded-xl px-4 active:opacity-60",
+              mode === "combo" ? "bg-subtle-strong" : "bg-card",
+            )}
+          >
+            <Text className="text-sm font-t3-medium text-foreground">
+              {mode === "combo" ? `Combo · ${targets.length}` : "Combo"}
+            </Text>
+          </Pressable>
+        </View>
+
+        {mode === "combo" ? (
+          <>
+            {targets.map((target, index) => {
+              const display = resolveComboTargetDisplay(target, session.providerGroups);
+              return (
+                <View
+                  key={`${String(target.instanceId)}:${target.model}`}
+                  className="min-h-11 flex-row items-center gap-2 border-t border-border-subtle px-4 py-2"
+                >
+                  <Text className="text-xs tabular-nums text-foreground-muted">{index + 1}</Text>
+                  <View className="min-w-0 flex-1">
+                    <Text className="text-sm font-t3-medium text-foreground" numberOfLines={1}>
+                      {display.title}
+                    </Text>
+                    <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+                      {display.subtitle}
+                    </Text>
+                  </View>
+                  <Pressable
+                    accessibilityLabel={`Remove ${display.title} from combo`}
+                    accessibilityRole="button"
+                    onPress={() => session.removeComboTargetAt(index)}
+                    className="min-h-11 min-w-11 items-center justify-center active:opacity-60"
+                  >
+                    <SymbolView
+                      name="xmark"
+                      size={14}
+                      tintColorClassName={"accent-icon-muted"}
+                      type="monochrome"
+                    />
+                  </Pressable>
+                </View>
+              );
+            })}
+            <View className="border-t border-border-subtle px-4 py-2">
+              <Text className="text-xs leading-5 text-foreground-muted">
+                {targets.length >= MAX_FALLBACK_COMBO_TARGETS
+                  ? `Up to ${MAX_FALLBACK_COMBO_TARGETS} targets. Remove one to add another.`
+                  : "Tap a model below to add it as a fallback."}
+              </Text>
+            </View>
+            <View className="border-t border-border-subtle">
+              <DisclosureRow
+                label="Strategy"
+                value={comboStrategyLabel(strategy)}
+                onPress={() => props.onOpenSubmenu({ kind: "combo-strategy" })}
+              />
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={session.clearCombo}
+              className="min-h-11 items-center justify-center border-t border-border-subtle px-4 active:opacity-60"
+            >
+              <Text className="text-sm font-t3-medium text-foreground">Clear combo</Text>
+            </Pressable>
+          </>
+        ) : (
+          <View className="border-t border-border-subtle px-4 py-2">
+            <Text className="text-xs leading-5 text-foreground-muted">
+              One model per turn. Switch to Combo to fall back across up to{" "}
+              {MAX_FALLBACK_COMBO_TARGETS} models when a turn hits a rate limit or provider error.
+            </Text>
+          </View>
+        )}
+      </View>
+    </View>
   );
 }
 
@@ -800,17 +1102,20 @@ function ThreadSettingsMainContent(props: {
   const usesTransparentNativeHeader = Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED;
   const listItems = useMemo<ReadonlyArray<ThreadSettingsCatalogItem>>(
     () => [
+      ...(session.comboSupported ? ([{ kind: "combo", key: "combo" }] as const) : []),
       ...(catalogItems.length === 0 ? ([{ kind: "empty", key: "empty" }] as const) : catalogItems),
       { kind: "options", key: "options" },
     ],
-    [catalogItems],
+    [catalogItems, session.comboSupported],
   );
   const renderCatalogItem = useCallback(
     (itemProps: LegendListRenderItemProps<ThreadSettingsCatalogItem>) => {
       const item = itemProps.item;
       let content: ReactNode;
 
-      if (item.kind === "provider") {
+      if (item.kind === "combo") {
+        content = <ThreadSettingsComboSection onOpenSubmenu={props.onOpenSubmenu} />;
+      } else if (item.kind === "provider") {
         content = <ThreadSettingsProviderListHeader provider={item.provider} />;
       } else if (item.kind === "model") {
         content = (
@@ -818,6 +1123,7 @@ function ThreadSettingsMainContent(props: {
             isFirst={item.isFirst}
             isLast={item.isLast}
             option={item.option}
+            providerLabel={item.providerLabel}
           />
         );
       } else if (item.kind === "empty") {
@@ -923,21 +1229,34 @@ function ThreadSettingsChoiceContent(props: {
             },
           })),
         }
-      : activeDescriptor?.type === "select"
+      : props.submenu.kind === "combo-strategy"
         ? {
-            rows: selectableChoices(activeDescriptor).map((choice) => ({
-              id: choice.id,
+            rows: COMBO_STRATEGY_CHOICES.map((choice) => ({
+              id: choice.value,
               label: choice.label,
-              description: undefined,
-              selected: choice.id === getProviderOptionCurrentValue(activeDescriptor),
+              description: choice.description,
+              selected: choice.value === (session.pendingCombo?.strategy ?? "priority"),
               onPress: () => {
-                void Haptics.selectionAsync();
-                session.applyOptionChange(activeDescriptor.id, choice.id);
+                session.updateComboStrategy(choice.value);
                 props.onSelected();
               },
             })),
           }
-        : null;
+        : activeDescriptor?.type === "select"
+          ? {
+              rows: selectableChoices(activeDescriptor).map((choice) => ({
+                id: choice.id,
+                label: choice.label,
+                description: undefined,
+                selected: choice.id === getProviderOptionCurrentValue(activeDescriptor),
+                onPress: () => {
+                  void Haptics.selectionAsync();
+                  session.applyOptionChange(activeDescriptor.id, choice.id);
+                  props.onSelected();
+                },
+              })),
+            }
+          : null;
 
   if (!submenuContent) {
     return <View className="flex-1 bg-sheet" />;
@@ -1020,6 +1339,19 @@ function ThreadSettingsModelsScreen() {
     if (!session.commitPendingModel()) return;
     presentation.onClose();
   }, [presentation, session]);
+  // Groups are logical models, so the provider filter enumerates the
+  // distinct providers behind the group's pairings.
+  const providerChoices = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const group of session.providerGroups) {
+      for (const model of group.models) {
+        if (!byKey.has(model.providerKey)) {
+          byKey.set(model.providerKey, model.providerLabel);
+        }
+      }
+    }
+    return [...byKey.entries()].map(([key, label]) => ({ key, label }));
+  }, [session.providerGroups]);
   const filterMenu = useMemo(
     () => ({
       title: "Model filters",
@@ -1034,12 +1366,11 @@ function ThreadSettingsModelsScreen() {
               state: session.providerFilter === null ? ("on" as const) : ("off" as const),
               onPress: () => session.setProviderFilter(null),
             },
-            ...session.providerGroups.map((group) => ({
+            ...providerChoices.map((choice) => ({
               type: "action" as const,
-              title: group.providerLabel,
-              state:
-                session.providerFilter === group.providerKey ? ("on" as const) : ("off" as const),
-              onPress: () => session.setProviderFilter(group.providerKey),
+              title: choice.label,
+              state: session.providerFilter === choice.key ? ("on" as const) : ("off" as const),
+              onPress: () => session.setProviderFilter(choice.key),
             })),
           ],
         },
@@ -1055,7 +1386,7 @@ function ThreadSettingsModelsScreen() {
           : []),
       ],
     }),
-    [session],
+    [providerChoices, session],
   );
 
   return (
@@ -1070,7 +1401,7 @@ function ThreadSettingsModelsScreen() {
               onPress: refreshProviders,
             },
             {
-              accessibilityLabel: session.pendingModel ? "Save thread settings" : "Done",
+              accessibilityLabel: session.hasPendingChanges ? "Save thread settings" : "Done",
               icon: "checkmark",
               onPress: commitAndClose,
             },
@@ -1082,7 +1413,7 @@ function ThreadSettingsModelsScreen() {
       <NativeStackScreenOptions
         optionsVersion={[
           session.providerFilter,
-          session.providerGroups.map((group) => group.providerKey),
+          session.providerGroups.map((group) => group.key),
           session.showLegacy,
         ]}
         options={{
@@ -1120,9 +1451,11 @@ function ThreadSettingsModelsScreen() {
           const title =
             submenu.kind === "runtime"
               ? "Runtime"
-              : (session.displayedDescriptors.find(
-                  (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-                )?.label ?? "Option");
+              : submenu.kind === "combo-strategy"
+                ? "Strategy"
+                : (session.displayedDescriptors.find(
+                    (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
+                  )?.label ?? "Option");
           navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
         }}
       />
@@ -1142,8 +1475,8 @@ function ThreadSettingsModelsScreen() {
           separateBackground
         />
         <NativeHeaderToolbar.Button
-          accessibilityLabel={session.pendingModel ? "Save thread settings" : "Done"}
-          label={session.pendingModel ? "Save" : "Done"}
+          accessibilityLabel={session.hasPendingChanges ? "Save thread settings" : "Done"}
+          label={session.hasPendingChanges ? "Save" : "Done"}
           onPress={commitAndClose}
         />
       </NativeHeaderToolbar>
@@ -1167,13 +1500,13 @@ function ThreadSettingsModelsScreen() {
               >
                 All providers
               </NativeHeaderToolbar.MenuAction>
-              {session.providerGroups.map((group) => (
+              {providerChoices.map((choice) => (
                 <NativeHeaderToolbar.MenuAction
-                  key={group.providerKey}
-                  isOn={session.providerFilter === group.providerKey}
-                  onPress={() => session.setProviderFilter(group.providerKey)}
+                  key={choice.key}
+                  isOn={session.providerFilter === choice.key}
+                  onPress={() => session.setProviderFilter(choice.key)}
                 >
-                  {group.providerLabel}
+                  {choice.label}
                 </NativeHeaderToolbar.MenuAction>
               ))}
             </NativeHeaderToolbar.Menu>

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildModelPickerSearchText, scoreModelPickerSearch } from "./modelPickerSearch";
+import {
+  buildModelPickerSearchText,
+  scoreModelPickerSearch,
+  scopeModelPickerSearchToDriverKind,
+} from "./modelPickerSearch";
 
 describe("buildModelPickerSearchText", () => {
   it("builds provider-agnostic search text from generic fields", () => {
@@ -127,5 +131,28 @@ describe("scoreModelPickerSearch", () => {
         "personal",
       ),
     ).not.toBeNull();
+  });
+});
+
+describe("scopeModelPickerSearchToDriverKind", () => {
+  const models = [
+    { driverKind: "cline", name: "Cline Model A" },
+    { driverKind: "cline", name: "Cline Model B" },
+    { driverKind: "codex", name: "GPT-5" },
+  ];
+
+  it("keeps only the selected provider's models", () => {
+    expect(scopeModelPickerSearchToDriverKind(models, "cline")).toEqual([
+      { driverKind: "cline", name: "Cline Model A" },
+      { driverKind: "cline", name: "Cline Model B" },
+    ]);
+  });
+
+  it("keeps the full pool when nothing is selected", () => {
+    expect(scopeModelPickerSearchToDriverKind(models, null)).toEqual(models);
+  });
+
+  it("returns an empty pool when the provider has no models", () => {
+    expect(scopeModelPickerSearchToDriverKind(models, "grok")).toEqual([]);
   });
 });

@@ -22,6 +22,7 @@ import {
   type ChatFileAttachment,
   DEFAULT_MODEL,
   type EnvironmentId,
+  type FallbackCombo,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -45,6 +46,7 @@ import {
   TerminalOpenInput,
 } from "@t3tools/contracts";
 import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import { deriveModelRerouteNotices } from "@t3tools/client-runtime/state/fallback-combo";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
@@ -8287,6 +8289,38 @@ export default function ChatView(props: ChatViewProps) {
       settings,
     ],
   );
+  // Fallback combo edits persist immediately through the existing
+  // `thread.meta.update` path (`combo: null` clears back to the manual
+  // model selection). Only server threads persist — drafts and loading
+  // threads hide the editor by receiving no callback.
+  const onComboChange = useCallback(
+    (combo: FallbackCombo | null) => {
+      if (!serverThread) return;
+      const threadId = serverThread.id;
+      void (async () => {
+        const result = await updateThreadMetadata({
+          environmentId,
+          input: { threadId, combo },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not update fallback combo",
+              description: chatActionErrorMessage(squashAtomCommandFailure(result)),
+            }),
+          );
+        }
+      })();
+    },
+    [environmentId, serverThread, updateThreadMetadata],
+  );
+  // `model.rerouted` activities (one per fallback hop) render as a small
+  // turn-header note on the executed turn's assistant message.
+  const rerouteNotices = useMemo(
+    () => deriveModelRerouteNotices(activeThread?.activities ?? []),
+    [activeThread?.activities],
+  );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (canOverrideServerThreadEnvMode) {
@@ -8811,6 +8845,7 @@ export default function ChatView(props: ChatViewProps) {
                 liveFollowEnabled={!paintOnlyDisplayedTimeline && timelineLiveFollowEnabled}
                 onIsAtEndChange={onIsAtEndChange}
                 onContentOverflowChange={setTimelineOverflows}
+                rerouteNotices={paintOnlyDisplayedTimeline ? [] : rerouteNotices}
                 onToolOutputCollapsedAtEnd={onToolOutputCollapsedAtEnd}
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
@@ -9007,6 +9042,8 @@ export default function ChatView(props: ChatViewProps) {
                               onChangeActivePendingUserInputCustomAnswer
                             }
                             onProviderModelSelect={onProviderModelSelect}
+                            threadCombo={serverThread?.combo}
+                            {...(serverThread ? { onComboChange } : {})}
                             onOpenProviderSetup={openProviderSetup}
                             getModelDisabledReason={getModelDisabledReason}
                             toggleInteractionMode={toggleInteractionMode}

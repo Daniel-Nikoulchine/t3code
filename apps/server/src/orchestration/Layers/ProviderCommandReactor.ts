@@ -984,6 +984,9 @@ const make = Effect.gen(function* () {
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+      // Read-only passthrough: the thread's combo travels with the turn so a
+      // later fallback step can evaluate it. No fallback logic here (10b).
+      ...(thread.combo != null ? { combo: thread.combo } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
   });

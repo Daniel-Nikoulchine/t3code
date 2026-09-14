@@ -2614,11 +2614,20 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
                 "antigravity",
                 "claudeAgent",
+                "cline",
                 "codex",
                 "cursor",
+                "deepseek",
+                "devin",
+                "droid",
                 "grok",
                 "hermes",
+                "kilo",
+                "omp",
+                "openclaw",
                 "opencode",
+                "pi",
+                "zcode",
               ]);
               assert.strictEqual(cursorProvider?.enabled, false);
               assert.strictEqual(cursorProvider?.status, "disabled");

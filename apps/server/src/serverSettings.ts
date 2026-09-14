@@ -15,6 +15,8 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
+  MODEL_CREDENTIAL_VALUE_REDACTED,
+  ModelCredential,
   ModelSelection,
   ProjectScript,
   type ProjectSettingsOverrides,
@@ -150,6 +152,19 @@ function usageLimitSourceSecretName(sourceId: string): string {
   return `usage-limit-source-${Buffer.from(sourceId, "utf8").toString("base64url")}`;
 }
 
+function modelCredentialSecretName(credentialId: string): string {
+  return `model-credential-${Buffer.from(credentialId, "utf8").toString("base64url")}`;
+}
+
+/**
+ * Stamp the display hint for a credential value. Mirrors how provider env
+ * secrets are handled: the value itself never stays in the settings file.
+ */
+const modelCredentialLastFour = (value: string): string | undefined => {
+  const trimmed = value.trim();
+  return trimmed.length >= 4 ? trimmed.slice(-4) : undefined;
+};
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -186,7 +201,18 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
       },
     ]),
   );
-  return { ...settings, providerInstances, usageLimitSources };
+  // Credential values live in the secret store; the sentinel means "keep
+  // what you have" when the client sends the map back.
+  const modelCredentials = Object.fromEntries(
+    Object.entries(settings.modelCredentials).map(([id, credential]) => [
+      id,
+      {
+        ...credential,
+        value: credential.value.length > 0 ? MODEL_CREDENTIAL_VALUE_REDACTED : "",
+      },
+    ]),
+  );
+  return { ...settings, providerInstances, usageLimitSources, modelCredentials };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -263,7 +289,13 @@ const PersistedOptionalProviderSettings = Schema.Struct({
     Schema.Struct({
       cursor: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
       grok: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      devin: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      kilo: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      copilot: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      droid: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      omp: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
       opencode: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      pi: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
     }),
   ),
 });
@@ -291,7 +323,13 @@ function restoreUsedProviders(
       instance.enabled === undefined &&
       (instance.driver === "cursor" ||
         instance.driver === "grok" ||
-        instance.driver === "opencode") &&
+        instance.driver === "devin" ||
+        instance.driver === "kilo" ||
+        instance.driver === "copilot" ||
+        instance.driver === "droid" ||
+        instance.driver === "omp" ||
+        instance.driver === "opencode" ||
+        instance.driver === "pi") &&
       usedProviderInstances.has(instanceId)
         ? { ...instance, enabled: true }
         : instance,
@@ -310,9 +348,33 @@ function restoreUsedProviders(
         ...settings.providers.grok,
         enabled: persisted.providers?.grok?.enabled ?? usedProviders.has("grok"),
       },
+      devin: {
+        ...settings.providers.devin,
+        enabled: persisted.providers?.devin?.enabled ?? usedProviders.has("devin"),
+      },
+      kilo: {
+        ...settings.providers.kilo,
+        enabled: persisted.providers?.kilo?.enabled ?? usedProviders.has("kilo"),
+      },
+      copilot: {
+        ...settings.providers.copilot,
+        enabled: persisted.providers?.copilot?.enabled ?? usedProviders.has("copilot"),
+      },
+      droid: {
+        ...settings.providers.droid,
+        enabled: persisted.providers?.droid?.enabled ?? usedProviders.has("droid"),
+      },
+      omp: {
+        ...settings.providers.omp,
+        enabled: persisted.providers?.omp?.enabled ?? usedProviders.has("omp"),
+      },
       opencode: {
         ...settings.providers.opencode,
         enabled: persisted.providers?.opencode?.enabled ?? usedProviders.has("opencode"),
+      },
+      pi: {
+        ...settings.providers.pi,
+        enabled: persisted.providers?.pi?.enabled ?? usedProviders.has("pi"),
       },
     },
     providerInstances,
@@ -367,7 +429,13 @@ const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
     ...DEFAULT_SERVER_SETTINGS.providers,
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: undefined },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: undefined },
+    devin: { ...DEFAULT_SERVER_SETTINGS.providers.devin, enabled: undefined },
+    kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: undefined },
+    copilot: { ...DEFAULT_SERVER_SETTINGS.providers.copilot, enabled: undefined },
+    droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: undefined },
+    omp: { ...DEFAULT_SERVER_SETTINGS.providers.omp, enabled: undefined },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: undefined },
+    pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: undefined },
   },
 };
 
@@ -592,13 +660,13 @@ const make = Effect.gen(function* () {
         provider_name AS "providerName",
         provider_instance_id AS "providerInstanceId"
       FROM projection_thread_sessions
-      WHERE provider_name IN ('cursor', 'grok', 'opencode')
+      WHERE provider_name IN ('cursor', 'devin', 'grok', 'kilo', 'copilot', 'droid', 'opencode')
       UNION
       SELECT DISTINCT
         provider_name AS "providerName",
         provider_instance_id AS "providerInstanceId"
       FROM provider_session_runtime
-      WHERE provider_name IN ('cursor', 'grok', 'opencode')
+      WHERE provider_name IN ('cursor', 'devin', 'grok', 'kilo', 'copilot', 'droid', 'opencode')
     `.pipe(
       Effect.mapError(
         (cause) =>
@@ -709,10 +777,29 @@ const make = Effect.gen(function* () {
           managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
         };
       }
+      const modelCredentials: Record<string, ModelCredential> = {};
+      for (const [credentialId, credential] of Object.entries(settings.modelCredentials)) {
+        if (credential.value !== MODEL_CREDENTIAL_VALUE_REDACTED) {
+          modelCredentials[credentialId] = credential;
+          continue;
+        }
+        const secret = yield* secretStore
+          .get(modelCredentialSecretName(credentialId))
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        modelCredentials[credentialId] = {
+          ...credential,
+          value: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+        };
+      }
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        modelCredentials: modelCredentials as ServerSettings["modelCredentials"],
       };
     });
 
@@ -881,10 +968,61 @@ const make = Effect.gen(function* () {
           );
       }
 
+      const modelCredentials: Record<string, ModelCredential> = {};
+      for (const [credentialId, credential] of Object.entries(next.modelCredentials)) {
+        const secretName = modelCredentialSecretName(credentialId);
+        if (credential.value === MODEL_CREDENTIAL_VALUE_REDACTED) {
+          // Unchanged from the client's point of view; the store already has it.
+          modelCredentials[credentialId] = credential;
+          continue;
+        }
+        if (credential.value.length === 0) {
+          yield* secretStore
+            .remove(secretName)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({ settingsPath, operation: "remove-secret", cause }),
+              ),
+            );
+          modelCredentials[credentialId] = credential;
+          continue;
+        }
+        yield* secretStore
+          .set(secretName, textEncoder.encode(credential.value))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({ settingsPath, operation: "write-secret", cause }),
+            ),
+          );
+        // The display hint is server-stamped: drop whatever the client sent
+        // with the new value before re-deriving it.
+        const { lastFour: _staleLastFour, ...rest } = credential;
+        const lastFour = modelCredentialLastFour(credential.value);
+        modelCredentials[credentialId] = {
+          ...rest,
+          value: MODEL_CREDENTIAL_VALUE_REDACTED,
+          ...(lastFour === undefined ? {} : { lastFour }),
+        };
+      }
+      for (const credentialId of Object.keys(current.modelCredentials)) {
+        if (credentialId in next.modelCredentials) continue;
+        yield* secretStore
+          .remove(modelCredentialSecretName(credentialId))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({ settingsPath, operation: "remove-stale-secret", cause }),
+            ),
+          );
+      }
+
       return {
         ...next,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        modelCredentials: modelCredentials as ServerSettings["modelCredentials"],
       };
     });
 

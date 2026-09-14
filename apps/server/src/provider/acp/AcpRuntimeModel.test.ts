@@ -64,6 +64,32 @@ describe("AcpRuntimeModel", () => {
     expect(modelConfigId).toBe("model");
   });
 
+  it("prefers the model selector over Cline's auth provider switch", () => {
+    const modelConfigId = extractModelConfigId({
+      sessionId: "session-1",
+      configOptions: [
+        {
+          id: "provider",
+          name: "Provider",
+          category: "model",
+          type: "select",
+          currentValue: "cline",
+          options: [{ value: "cline", name: "Cline Usage-Billing" }],
+        },
+        {
+          id: "model",
+          name: "Model",
+          category: "model",
+          type: "select",
+          currentValue: "anthropic/claude-sonnet-5",
+          options: [{ value: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5" }],
+        },
+      ],
+    } satisfies EffectAcpSchema.NewSessionResponse);
+
+    expect(modelConfigId).toBe("model");
+  });
+
   it("detects Grok session replay updates from _meta.isReplay", () => {
     expect(
       sessionUpdateIsReplay({

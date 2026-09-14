@@ -1,6 +1,11 @@
 import * as NodeURL from "node:url";
 
-import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  ModelBackendConfig,
+  ProviderApprovalDecision,
+  RuntimeMode,
+} from "@t3tools/contracts";
 import {
   createOpencodeClient,
   type Agent,
@@ -56,6 +61,81 @@ export function resolveOpenCodeConfigContent(
     inheritedEnvironment.OPENCODE_CONFIG_CONTENT ??
     OPENCODE_EMPTY_CONFIG_CONTENT
   );
+}
+
+/**
+ * Provider id owned by T3 in the generated `OPENCODE_CONFIG_CONTENT`. Models
+ * injected for a model backend are addressable as `<id>/<slug>` in
+ * `session.promptAsync` and surface in the provider inventory as
+ * `t3-backend/<slug>`.
+ */
+export const OPENCODE_BACKEND_PROVIDER_ID = "t3-backend";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge a model backend into the OpenCode config content as an AI-SDK provider
+ * entry, preserving every existing provider. Only the `t3-backend` id is
+ * T3-owned and replaced.
+ *
+ * Returns `undefined` when there is nothing to inject or the existing content
+ * is not a JSON object; the caller must then leave `OPENCODE_CONFIG_CONTENT`
+ * unset so the user's own value keeps flowing through unchanged.
+ *
+ * The declared protocols pick the wire: an OpenAI-speaking endpoint uses the
+ * `@ai-sdk/openai-compatible` package, an Anthropic-only endpoint uses
+ * `@ai-sdk/anthropic`. Declaring both (the default) resolves to the
+ * OpenAI-compatible package. `models` is optional — OpenCode lists models it
+ * discovers from the endpoint dynamically when absent.
+ */
+export function mergeOpenCodeBackendConfigContent(input: {
+  readonly backend: ModelBackendConfig;
+  readonly existingContent: string | undefined;
+  readonly apiKey: string | undefined;
+}): string | undefined {
+  const backend = input.backend;
+  if (backend.kind === "native" || backend.baseUrl === undefined || backend.baseUrl.length === 0) {
+    return undefined;
+  }
+  const protocols = backend.protocols ?? ["openai", "anthropic"];
+  const npmPackage = protocols.includes("openai")
+    ? "@ai-sdk/openai-compatible"
+    : protocols.includes("anthropic")
+      ? "@ai-sdk/anthropic"
+      : undefined;
+  if (npmPackage === undefined) return undefined;
+
+  let existing: Record<string, unknown> = {};
+  if (input.existingContent !== undefined && input.existingContent.trim().length > 0) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(input.existingContent);
+    } catch {
+      return undefined;
+    }
+    if (!isRecord(parsed)) return undefined;
+    existing = parsed;
+  }
+
+  const existingProviders = existing.provider;
+  const providers: Record<string, unknown> = isRecord(existingProviders)
+    ? { ...existingProviders }
+    : {};
+  providers[OPENCODE_BACKEND_PROVIDER_ID] = {
+    npm: npmPackage,
+    name: backend.displayName ?? "T3 Backend",
+    options: {
+      baseURL: backend.baseUrl,
+      ...(input.apiKey !== undefined && input.apiKey.length > 0 ? { apiKey: input.apiKey } : {}),
+    },
+    ...(backend.models !== undefined && backend.models.length > 0
+      ? { models: Object.fromEntries(backend.models.map((slug) => [slug, { name: slug }])) }
+      : {}),
+  };
+
+  return JSON.stringify({ ...existing, provider: providers });
 }
 
 export function resolveOpenCodeServerPassword(

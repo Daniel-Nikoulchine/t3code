@@ -18,6 +18,22 @@ describe("ProviderSettingsForm helpers", () => {
     ]);
   });
 
+  it("exposes Kilo as an early-access provider with binary settings", () => {
+    const kilo = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("kilo")];
+    expect(kilo?.label).toBe("Kilo");
+    expect(kilo?.badgeLabel).toBe("Early Access");
+    expect(deriveProviderSettingsFields(kilo!).map((field) => field.key)).toEqual(["binaryPath"]);
+  });
+
+  it("exposes DeepSeek as an early-access provider with binary settings", () => {
+    const deepseek = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("deepseek")];
+    expect(deepseek?.label).toBe("DeepSeek");
+    expect(deepseek?.badgeLabel).toBe("Early Access");
+    expect(deriveProviderSettingsFields(deepseek!).map((field) => field.key)).toEqual([
+      "binaryPath",
+    ]);
+  });
+
   it("derives visible provider config fields from the client definition schema", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
 

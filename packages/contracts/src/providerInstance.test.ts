@@ -171,6 +171,34 @@ describe("ProviderInstanceConfig", () => {
     expect(() => decodeProviderInstanceConfig({ driver: "" })).toThrow();
     expect(() => decodeProviderInstanceConfig({ driver: "has spaces" })).toThrow();
   });
+
+  it("decodes instance config with a connectionId", () => {
+    const decoded = decodeProviderInstanceConfig({
+      driver: "opencode",
+      connectionId: "main-proxy",
+    });
+    expect(decoded.connectionId).toBe("main-proxy");
+  });
+
+  it("routes direct (native) when connectionId is absent", () => {
+    const decoded = decodeProviderInstanceConfig({ driver: "opencode" });
+    expect(decoded.connectionId).toBeUndefined();
+  });
+
+  it("ignores legacy useProxy/backend fields (unreleased feature, no migration)", () => {
+    // `useProxy` (global-proxy opt-in) and per-instance `backend` envelopes
+    // never shipped: old dev settings files may still carry them. Effect
+    // strips unknown fields, so the decode succeeds and the stale fields
+    // fall away.
+    const decoded = decodeProviderInstanceConfig({
+      driver: "opencode",
+      useProxy: true,
+      backend: { kind: "openai-compatible", baseUrl: "http://127.0.0.1:20128/v1" },
+    }) as unknown as Record<string, unknown>;
+    expect(decoded["backend"]).toBeUndefined();
+    expect(decoded["useProxy"]).toBeUndefined();
+    expect(decoded["connectionId"]).toBeUndefined();
+  });
 });
 
 describe("ProviderInstanceConfigMap", () => {

@@ -22,6 +22,7 @@
  * @module provider/ProviderDriver
  */
 import type {
+  ModelBackendConfig,
   ProviderConsumeResetCreditOutcome,
   ProviderDriverKind,
   ProviderInstanceEnvironment,
@@ -116,6 +117,14 @@ export interface ProviderDriverCreateInput<Config> {
   readonly environment: ProviderInstanceEnvironment;
   readonly enabled: boolean;
   readonly config: Config;
+  /**
+   * Optional model backend (routing/auth target) for this instance.
+   * The registry synthesizes it from `ProviderInstanceConfig.connectionId`
+   * plus `ServerSettings.modelBackendConnections`; drivers that spawn
+   * harness processes merge it over `environment` via
+   * `resolveModelBackendEnvironment`. Absent means native.
+   */
+  readonly backend?: ModelBackendConfig | undefined;
 }
 
 /**

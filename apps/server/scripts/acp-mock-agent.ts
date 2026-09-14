@@ -55,6 +55,11 @@ const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const hermesProfile = process.env.T3_ACP_HERMES === "1";
+const deepseekProfile = process.env.T3_ACP_DEEPSEEK === "1";
+const devinProfile = process.env.T3_ACP_DEVIN === "1";
+// Mirrors the real Kilo ACP (`kilo acp`): `provider/model` ids selected via
+// `session/set_model`, authenticated with method id `kilo-login`.
+const kiloProfile = process.env.T3_ACP_KILO === "1";
 const hermesStateLogPath = process.env.T3_ACP_HERMES_STATE_LOG_PATH;
 // Canonical Hermes effort ladder (mirrors `parse_reasoning_effort` in
 // hermes_constants.py plus the `none` disable level). Unknown values keep
@@ -70,6 +75,11 @@ const HERMES_VALID_EFFORTS: ReadonlySet<string> = new Set([
   "ultra",
 ]);
 let currentHermesReasoningEffort = "medium";
+
+// Mirrors the official DeepSeek harness ACP: versioned model ids plus a
+// `reasoning_effort` session config option (no `session/set_model`).
+let currentDeepseekReasoningEffort = "high";
+const DEEPSEEK_VALID_EFFORTS: ReadonlySet<string> = new Set(["off", "low", "high", "max"]);
 
 function normalizeHermesReasoningEffort(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -109,7 +119,11 @@ const permissionRequestCount = Math.max(
 const sessionId = "mock-session-1";
 
 let currentModeId = antigravityProfile ? "default" : "ask";
-let currentModelId = antigravityProfile ? "gemini-test-low" : "default";
+let currentModelId = antigravityProfile
+  ? "gemini-test-low"
+  : kiloProfile
+    ? "anthropic/kilo-test-model"
+    : "default";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";
 let currentContext = "272k";
@@ -155,6 +169,39 @@ process.once("exit", (code) => {
 });
 
 function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
+  if (deepseekProfile) {
+    // Mirrors `dsh --profile acp`: routes arrive grouped by provider.
+    return [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select" as const,
+        currentValue: currentModelId,
+        options: [
+          {
+            group: "deepseek-official",
+            name: "DeepSeek",
+            options: deepseekAcpModels.map((model) => ({
+              value: model.modelId,
+              name: model.name,
+            })),
+          },
+        ],
+      },
+      {
+        id: "reasoning_effort",
+        name: "Reasoning effort",
+        category: "thought_level",
+        type: "select" as const,
+        currentValue: currentDeepseekReasoningEffort,
+        options: [...DEEPSEEK_VALID_EFFORTS].map((effort) => ({
+          value: effort,
+          name: effort,
+        })),
+      },
+    ];
+  }
   if (antigravityProfile) {
     return [
       {
@@ -347,6 +394,13 @@ const hermesAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
   { modelId: "hermes-test-alt", name: "Hermes Test Alt" },
 ];
 
+// Mirrors the real Kilo ACP: `provider/model` ids (as printed by
+// `kilo models`), selected via `session/set_model`. Unknown ids are rejected.
+const kiloAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
+  { modelId: "anthropic/kilo-test-model", name: "Kilo Test Model" },
+  { modelId: "openai/kilo-test-alt", name: "Kilo Test Alt" },
+];
+
 const availableModes: ReadonlyArray<AcpSchema.SessionMode> = antigravityProfile
   ? [
       { id: "default", name: "Default" },
@@ -398,9 +452,83 @@ const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
   { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
 ];
 
+// Mirrors the real Devin ACP: it advertises concrete model ids (opus,
+// sonnet, swe, …), never the T3 product slug "devin-default", and it
+// rejects unknown ids in session/set_model.
+const devinAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
+  { modelId: "opus", name: "Opus" },
+  { modelId: "sonnet", name: "Sonnet" },
+  { modelId: "devin-test-alt", name: "Devin Test Alt" },
+];
+
+// Mirrors the official DeepSeek harness ACP (`dsh --profile acp`): opaque
+// provider/model route values with a reasoning menu on the flash model,
+// selected through the `model` / `reasoning_effort` session config options.
+const DEEPSEEK_FLASH_MODEL = '["deepseek-official","deepseek-v4-flash"]';
+const deepseekAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
+  { modelId: DEEPSEEK_FLASH_MODEL, name: "DeepSeek V4 Flash" },
+  { modelId: '["deepseek-official","deepseek-v4-pro"]', name: "DeepSeek V4 Pro" },
+  { modelId: '["deepseek-official","deepseek-flash"]', name: "DeepSeek V41 Flash" },
+  {
+    modelId: '["deepseek-official","deepseek-v4-flash-vision-exp"]',
+    name: "DeepSeek V4 Flash Vision",
+  },
+];
+
+function deepseekModelState(): AcpSchema.SessionModelState {
+  const modelId = deepseekAcpModels.some((model) => model.modelId === currentModelId)
+    ? currentModelId
+    : DEEPSEEK_FLASH_MODEL;
+  return {
+    currentModelId: modelId,
+    availableModels: deepseekAcpModels.map((model) =>
+      model.modelId === DEEPSEEK_FLASH_MODEL
+        ? {
+            ...model,
+            _meta: {
+              supportsReasoningEffort: true,
+              reasoningEffort: currentDeepseekReasoningEffort,
+              reasoningEfforts: [...DEEPSEEK_VALID_EFFORTS].map((effort) => ({
+                id: effort,
+                value: effort,
+                label: `${effort} effort`,
+                default: effort === "high",
+              })),
+            },
+          }
+        : model,
+    ),
+  };
+}
+
+if (deepseekProfile) {
+  currentModelId = DEEPSEEK_FLASH_MODEL;
+}
+
 function modelState(): AcpSchema.SessionModelState {
+  if (deepseekProfile) {
+    return deepseekModelState();
+  }
   if (antigravityProfile) {
     return { currentModelId, availableModels: antigravityModels };
+  }
+  if (devinProfile) {
+    const devinModelId = devinAcpModels.some((model) => model.modelId === currentModelId)
+      ? currentModelId
+      : "opus";
+    return {
+      currentModelId: devinModelId,
+      availableModels: devinAcpModels,
+    };
+  }
+  if (kiloProfile) {
+    const kiloModelId = kiloAcpModels.some((model) => model.modelId === currentModelId)
+      ? currentModelId
+      : "anthropic/kilo-test-model";
+    return {
+      currentModelId: kiloModelId,
+      availableModels: kiloAcpModels,
+    };
   }
   if (hermesProfile) {
     const hermesModelId = hermesAcpModels.some((model) => model.modelId === currentModelId)
@@ -465,9 +593,10 @@ const program = Effect.gen(function* () {
       return {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
-        // Grok advertises model state before any session exists; the provider
-        // health check reads it from here without authenticating.
-        _meta: { modelState: modelState() },
+        // dsh advertises no model state on initialize; the catalog lives in
+        // the session config options. Mirror that so DeepSeek tests exercise
+        // the same discovery path as production.
+        ...(deepseekProfile ? {} : { _meta: { modelState: modelState() } }),
       };
     }),
   );
@@ -493,6 +622,15 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       if (antigravityProfile) {
         yield* publishAntigravityCommands(sessionId);
+      }
+      if (kiloProfile) {
+        // Mirrors the real Kilo ACP: session/new answers with the session id
+        // plus config options only — no modes/models payload. The active
+        // model is the "model" select's currentValue.
+        return {
+          sessionId,
+          configOptions: configOptions(),
+        };
       }
       return {
         sessionId,
@@ -591,6 +729,18 @@ const program = Effect.gen(function* () {
 
   yield* agent.handleSetSessionModel((request) =>
     Effect.gen(function* () {
+      if (deepseekProfile) {
+        // The official DeepSeek harness does not implement session/set_model;
+        // model selection goes through the `model` config option. Rejecting
+        // here proves the adapter honors that contract.
+        return yield* AcpError.AcpRequestError.invalidParams(
+          `Mock DeepSeek does not implement session/set_model`,
+          {
+            method: "session/set_model",
+            params: request,
+          },
+        );
+      }
       if (hermesProfile) {
         if (!hermesAcpModels.some((model) => model.modelId === request.modelId)) {
           return yield* AcpError.AcpRequestError.invalidParams(
@@ -607,6 +757,19 @@ const program = Effect.gen(function* () {
         // RPC. The mock keeps it in a separate variable, which is the same
         // observable behavior; log it so tests can assert the retention.
         logHermesState("model-switched");
+        return {};
+      }
+      if (kiloProfile) {
+        if (!kiloAcpModels.some((model) => model.modelId === request.modelId)) {
+          return yield* AcpError.AcpRequestError.invalidParams(
+            `Unknown mock model id: ${request.modelId}`,
+            {
+              method: "session/set_model",
+              params: request,
+            },
+          );
+        }
+        currentModelId = request.modelId;
         return {};
       }
       if (!modelState().availableModels.some((model) => model.modelId === request.modelId)) {
@@ -649,6 +812,15 @@ const program = Effect.gen(function* () {
         }
         logHermesState("reasoning-applied");
         return { configOptions: [] };
+      }
+      if (deepseekProfile && request.configId === "reasoning_effort") {
+        // Mirror the official DeepSeek harness: the effort is a plain session
+        // config option next to `model`. Unknown values keep the previous
+        // effort, exactly like the Hermes ladder above.
+        if (typeof request.value === "string" && DEEPSEEK_VALID_EFFORTS.has(request.value)) {
+          currentDeepseekReasoningEffort = request.value;
+        }
+        return { configOptions: configOptions() };
       }
       if (request.configId === "mode" && typeof request.value === "string") {
         currentModeId = request.value;

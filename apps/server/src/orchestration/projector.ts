@@ -419,6 +419,11 @@ export function projectEvent(
             projectId: payload.projectId,
             title: payload.title,
             modelSelection: payload.modelSelection,
+            // Null means cleared: the read model exposes "no combo" as
+            // undefined so cleared and never-set threads read identically.
+            ...(payload.combo !== undefined && payload.combo !== null
+              ? { combo: payload.combo }
+              : {}),
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
             branch: payload.branch,
@@ -612,6 +617,12 @@ export function projectEvent(
                 : {}),
               ...(payload.modelSelection !== undefined
                 ? { modelSelection: payload.modelSelection }
+                : {}),
+              // Null clears the combo; normalize to undefined (see thread.created).
+              ...(payload.combo !== undefined
+                ? payload.combo === null
+                  ? { combo: undefined }
+                  : { combo: payload.combo }
                 : {}),
               ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
               ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),

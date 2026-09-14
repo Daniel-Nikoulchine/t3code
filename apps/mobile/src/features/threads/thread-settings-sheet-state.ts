@@ -1,9 +1,14 @@
-import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
+import type { ModelSelection } from "@t3tools/contracts";
+import type { ModelGroup, ModelOption } from "../../lib/modelOptions";
 
-/** Match the terms a user can actually see or recognize in the model picker. */
+/**
+ * Match the terms a user can actually see or recognize in the model-first
+ * picker: the logical model's name, the pairing's own fields, and the
+ * provider label behind each pairing.
+ */
 export function modelMatchesCatalogQuery(input: {
   readonly model: ModelOption;
-  readonly providerLabel: string;
+  readonly groupLabel: string;
   readonly query: string;
 }): boolean {
   const query = input.query.trim().toLocaleLowerCase();
@@ -15,7 +20,8 @@ export function modelMatchesCatalogQuery(input: {
     input.model.label,
     input.model.subtitle,
     input.model.selection.model,
-    input.providerLabel,
+    input.model.providerLabel,
+    input.groupLabel,
   ].some((value) => value.toLocaleLowerCase().includes(query));
 }
 
@@ -34,11 +40,34 @@ export function pendingModelAfterPress(input: {
 /** A model can disappear while the picker is open. */
 export function canCommitPendingModel(
   pending: ModelOption,
-  groups: ReadonlyArray<ProviderGroup>,
+  groups: ReadonlyArray<ModelGroup>,
 ): boolean {
   return groups.some((group) =>
     group.models.some((model) => model.key === pending.key && !model.isUnavailable),
   );
+}
+
+/**
+ * Resolve a human-readable label for a combo target from the same catalog
+ * the picker renders: the option's short label plus its provider label.
+ * Falls back to raw slugs when the catalog does not (yet) list the target,
+ * so shell/catalog races never render a blank row.
+ */
+export function resolveComboTargetDisplay(
+  target: ModelSelection,
+  groups: ReadonlyArray<ModelGroup>,
+): { readonly title: string; readonly subtitle: string } {
+  for (const group of groups) {
+    const option = group.models.find(
+      (candidate) =>
+        candidate.selection.instanceId === target.instanceId &&
+        candidate.selection.model === target.model,
+    );
+    if (option) {
+      return { title: option.label, subtitle: option.providerLabel };
+    }
+  }
+  return { title: target.model, subtitle: String(target.instanceId) };
 }
 
 /**

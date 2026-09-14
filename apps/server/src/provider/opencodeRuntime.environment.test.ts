@@ -19,6 +19,7 @@ import {
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   OpenCodeRuntimeLive,
+  mergeOpenCodeBackendConfigContent,
   resolveOpenCodeConfigContent,
   resolveOpenCodeServerPassword,
   verifyOpenCodeServerVersion,
@@ -41,6 +42,123 @@ describe("resolveOpenCodeConfigContent", () => {
       }),
     ).toBe('{"source":"process"}');
     expect(resolveOpenCodeConfigContent(undefined, {})).toBe("{}");
+  });
+});
+
+describe("mergeOpenCodeBackendConfigContent", () => {
+  const backend = {
+    kind: "openai-compatible" as const,
+    baseUrl: "http://127.0.0.1:20128/v1",
+    models: ["glm-4.6", "kimi-k2"],
+  };
+
+  it("injects a t3-backend provider with models into empty config content", () => {
+    const content = mergeOpenCodeBackendConfigContent({
+      backend,
+      existingContent: undefined,
+      apiKey: "secret",
+    });
+    expect(content).toBeDefined();
+    const parsed = JSON.parse(content ?? "{}") as {
+      provider: Record<
+        string,
+        {
+          npm: string;
+          name: string;
+          options: Record<string, string>;
+          models: Record<string, unknown>;
+        }
+      >;
+    };
+    const entry = parsed.provider["t3-backend"];
+    if (entry === undefined) {
+      return expect.fail("Expected the t3-backend provider entry");
+    }
+    expect(entry.npm).toBe("@ai-sdk/openai-compatible");
+    expect(entry.name).toBe("T3 Backend");
+    expect(entry.options.baseURL).toBe("http://127.0.0.1:20128/v1");
+    expect(entry.options.apiKey).toBe("secret");
+    expect(Object.keys(entry.models)).toEqual(["glm-4.6", "kimi-k2"]);
+  });
+
+  it("preserves the user's existing providers and merges over the reserved id only", () => {
+    const content = mergeOpenCodeBackendConfigContent({
+      backend,
+      existingContent: JSON.stringify({
+        theme: "dark",
+        provider: {
+          "my-gateway": {
+            npm: "@ai-sdk/openai-compatible",
+            options: { baseURL: "http://mine/v1" },
+          },
+          "t3-backend": {
+            npm: "@ai-sdk/openai-compatible",
+            options: { baseURL: "http://stale/v1" },
+          },
+        },
+      }),
+      apiKey: undefined,
+    });
+    expect(content).toBeDefined();
+    const parsed = JSON.parse(content ?? "{}") as {
+      theme: string;
+      provider: Record<string, { options: Record<string, string> }>;
+    };
+    expect(parsed.theme).toBe("dark");
+    const myGateway = parsed.provider["my-gateway"];
+    const injected = parsed.provider["t3-backend"];
+    if (myGateway === undefined || injected === undefined) {
+      return expect.fail("Expected existing providers to be preserved");
+    }
+    expect(myGateway.options.baseURL).toBe("http://mine/v1");
+    expect(injected.options.baseURL).toBe("http://127.0.0.1:20128/v1");
+    expect(injected.options.apiKey).toBeUndefined();
+  });
+
+  it("uses the Anthropic wire for an anthropic-only endpoint and omits models when absent", () => {
+    const content = mergeOpenCodeBackendConfigContent({
+      backend: {
+        kind: "openai-compatible",
+        baseUrl: "http://127.0.0.1:20128/v1",
+        protocols: ["anthropic"],
+      },
+      existingContent: undefined,
+      apiKey: "anthropic-secret",
+    });
+    expect(content).toBeDefined();
+    const parsed = JSON.parse(content ?? "{}") as {
+      provider: Record<string, { npm: string; options: Record<string, string>; models?: unknown }>;
+    };
+    const entry = parsed.provider["t3-backend"];
+    if (entry === undefined) {
+      return expect.fail("Expected the t3-backend provider entry");
+    }
+    expect(entry.npm).toBe("@ai-sdk/anthropic");
+    expect(entry.options.apiKey).toBe("anthropic-secret");
+    expect(entry.models).toBeUndefined();
+  });
+
+  it("returns undefined for content that is not a JSON object", () => {
+    expect(
+      mergeOpenCodeBackendConfigContent({
+        backend,
+        existingContent: "not json",
+        apiKey: undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      mergeOpenCodeBackendConfigContent({ backend, existingContent: "[1,2]", apiKey: undefined }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for native backends", () => {
+    expect(
+      mergeOpenCodeBackendConfigContent({
+        backend: { kind: "native" },
+        existingContent: "{}",
+        apiKey: "x",
+      }),
+    ).toBeUndefined();
   });
 });
 

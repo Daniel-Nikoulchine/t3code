@@ -30,10 +30,10 @@ import { pipe } from "effect/Function";
 import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
-import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
+import type { ModelOption, ModelGroup } from "../../lib/modelOptions";
 import {
+  buildModelGroups,
   buildModelOptions,
-  groupByProvider,
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
@@ -173,7 +173,7 @@ type NewTaskFlowContextValue = {
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
   readonly selectedProviderStatus: ServerProvider | null;
-  readonly providerGroups: ReadonlyArray<ProviderGroup>;
+  readonly providerGroups: ReadonlyArray<ModelGroup>;
   readonly filteredBranches: ReadonlyArray<VcsRef>;
   readonly reset: () => void;
   readonly setProject: (project: EnvironmentProject) => void;
@@ -582,7 +582,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     [selectedModel, selectedProjectDraftKey],
   );
 
-  const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
+  const providerGroups = useMemo(
+    () =>
+      buildModelGroups(
+        selectedEnvironmentServerConfig,
+        draftModelSelection ?? projectDefaultModelSelection ?? stickyModelSelection,
+      ),
+    [
+      selectedEnvironmentServerConfig,
+      draftModelSelection,
+      projectDefaultModelSelection,
+      stickyModelSelection,
+    ],
+  );
   const setPrompt = useCallback(
     (value: string) => {
       if (!selectedProjectDraftKey) {

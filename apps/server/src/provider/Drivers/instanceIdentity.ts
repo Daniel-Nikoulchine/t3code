@@ -1,4 +1,4 @@
-import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
+import type { ModelBackendConfig, ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
 
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
@@ -17,6 +17,7 @@ export const withInstanceIdentity =
     readonly displayName: string | undefined;
     readonly accentColor: string | undefined;
     readonly continuationGroupKey: string;
+    readonly backend?: ModelBackendConfig | undefined;
   }) =>
   (snapshot: ServerProviderDraft): ServerProvider => ({
     ...snapshot,
@@ -25,4 +26,14 @@ export const withInstanceIdentity =
     ...(input.displayName ? { displayName: input.displayName } : {}),
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     continuation: { groupKey: input.continuationGroupKey },
+    ...(input.backend === undefined
+      ? {}
+      : {
+          backend: {
+            kind: input.backend.kind,
+            ...(input.backend.displayName ? { displayName: input.backend.displayName } : {}),
+            viaProxy: input.backend.kind !== "native",
+            ...(input.backend.kind !== "native" ? { capabilitiesDegraded: true as const } : {}),
+          },
+        }),
   });

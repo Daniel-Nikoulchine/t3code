@@ -477,6 +477,30 @@ export function runtimeEventToActivities(
       ];
     }
 
+    case "model.rerouted": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "model.rerouted",
+          // Use the reroute hop as the row label so the work log shows
+          // what the fallback did, not a generic "Model rerouted".
+          summary: truncateDetail(
+            `Model rerouted: ${event.payload.fromModel} → ${event.payload.toModel}`,
+            120,
+          ),
+          payload: {
+            fromModel: event.payload.fromModel,
+            toModel: event.payload.toModel,
+            reason: event.payload.reason,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "turn.plan.updated": {
       return [
         {

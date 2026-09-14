@@ -18,6 +18,7 @@ import type {
   AssistantCitation,
   ChatFileAttachment,
   EnvironmentId,
+  FallbackCombo,
   ModelSelection,
   ProjectId,
   PullRequestListInput,
@@ -239,6 +240,8 @@ import {
 import { useEnvironmentQuery } from "~/state/query";
 import { useDebouncedValue } from "~/state/queries";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { HarnessPicker } from "./HarnessPicker";
+import { ThreadComboEditor } from "./ThreadComboEditor";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
@@ -934,11 +937,17 @@ import { hasProviderSetup } from "./ProviderStatusBanner";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  getDefaultProviderInstanceModel,
   NO_PROVIDER_MODEL_SELECTION,
   sortProviderInstanceEntries,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
-import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
+import {
+  type AppModelOption,
+  deriveAppModelCatalog,
+  getAppModelOptionsForInstance,
+  resolveHarnessSwitchModel,
+} from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import {
   isVideoAttachment,
@@ -1411,6 +1420,13 @@ export interface ChatComposerProps {
   ) => void;
 
   onProviderModelSelect: (instanceId: ProviderInstanceId, model: string) => void;
+  /**
+   * Thread fallback combo for the single-vs-combo editor. Absent (`undefined`
+   * callback) when there is no server thread to persist to (drafts, loading)
+   * — the editor hides then. `combo: null` clears back to Single.
+   */
+  threadCombo?: FallbackCombo | null | undefined;
+  onComboChange?: ((combo: FallbackCombo | null) => void) | undefined;
   onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   toggleInteractionMode: () => void;
@@ -1510,6 +1526,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onPreviousActivePendingUserInputQuestion,
     onChangeActivePendingUserInputCustomAnswer,
     onProviderModelSelect,
+    threadCombo,
+    onComboChange,
     onOpenProviderSetup,
     getModelDisabledReason,
     toggleInteractionMode,
@@ -2010,6 +2028,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   }, [modelOptionsByInstance, selectedInstanceId, selectedModelForPicker, selectedProvider]);
+  // Pooled logical models for the model-first picker. Snapshots can lag a
+  // settings write on `enabled`, so feed the same settings-corrected entries
+  // the per-instance options consume.
+  const logicalModels = useMemo(
+    () =>
+      deriveAppModelCatalog(
+        settings,
+        providerInstanceEntries.map((entry) => ({ ...entry.snapshot, enabled: entry.enabled })),
+      ),
+    [providerInstanceEntries, settings],
+  );
+
+  // Standalone harness switch: keep the current model when the target
+  // harness offers it, otherwise fall back to that harness's default model.
+  const handleHarnessSelect = useCallback(
+    (instanceId: ProviderInstanceId) => {
+      if (instanceId === selectedInstanceId) return;
+      const options = modelOptionsByInstance.get(instanceId) ?? [];
+      const model =
+        resolveHarnessSwitchModel(options, selectedModel) ??
+        getDefaultProviderInstanceModel(providerStatuses, instanceId);
+      if (!model) return;
+      onProviderModelSelect(instanceId, model);
+    },
+    [
+      modelOptionsByInstance,
+      onProviderModelSelect,
+      providerStatuses,
+      selectedInstanceId,
+      selectedModel,
+    ],
+  );
 
   // ------------------------------------------------------------------
   // Context window
@@ -4885,6 +4935,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           data-resting-controls-separator="true"
         />
       ) : null}
+      <HarnessPicker
+        isComposerOwned
+        disabled={providerCatalogPending}
+        activeInstanceId={
+          providerCatalogPending
+            ? (activeThreadModelSelection?.instanceId ?? selectedInstanceId)
+            : selectedInstanceId
+        }
+        instanceEntries={providerInstanceEntries}
+        lockedProvider={lockedProvider}
+        lockedContinuationGroupKey={lockedContinuationGroupKey}
+        size={composerControlsInStrip ? "xs" : "sm"}
+        triggerClassName={
+          composerControlsInStrip
+            ? "shrink text-xs! @max-[640px]/composer-surface:[&_[data-chat-harness-picker-label]]:w-0 @max-[640px]/composer-surface:[&_[data-chat-harness-picker-label]]:flex-none"
+            : "-ms-2.5"
+        }
+        instanceIndicatorBackground={
+          composerControlsInStrip
+            ? "color-mix(in srgb, var(--chat-composer-glass-surface) var(--glass-opacity), transparent)"
+            : "var(--contrast-input)"
+        }
+        onInstanceChange={handleHarnessSelect}
+      />
       <ProviderModelPicker
         isComposerOwned
         disabled={providerCatalogPending}
@@ -4903,6 +4977,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         instanceEntries={providerInstanceEntries}
         keybindings={keybindings}
         modelOptionsByInstance={modelOptionsByInstance}
+        logicalModels={logicalModels}
         size={composerControlsInStrip ? "xs" : "sm"}
         triggerClassName={
           composerControlsInStrip
@@ -4930,6 +5005,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onInstanceModelChange={onProviderModelSelect}
         onOpenProviderSetup={onOpenProviderSetup}
       />
+      {onComboChange !== undefined && lockedProvider === null && !showProviderUnavailable ? (
+        <ThreadComboEditor
+          combo={threadCombo}
+          currentSelection={selectedModelSelection}
+          instanceEntries={providerInstanceEntries}
+          modelOptionsByInstance={modelOptionsByInstance}
+          size={composerControlsInStrip ? "xs" : "sm"}
+          disabled={providerCatalogPending}
+          onChange={onComboChange}
+        />
+      ) : null}
 
       {composerControlsCompact ? (
         <CompactComposerControlsMenu

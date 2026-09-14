@@ -138,6 +138,16 @@ type AcpToolCallUpdate = Extract<
 export function extractModelConfigId(sessionResponse: AcpSessionSetupResponse): string | undefined {
   const configOptions = sessionResponse.configOptions;
   if (!configOptions) return undefined;
+  // Prefer the canonical `model` selector: Cline advertises its auth
+  // provider switch (`provider`: cline/cline-pass/openai-codex) with
+  // `category: "model"` ahead of the real model selector, and routing a
+  // model id into `provider` fails the session (`expected one of cline,
+  // cline-pass, openai-codex`).
+  for (const opt of configOptions) {
+    if (opt.category === "model" && opt.id.trim() === "model") {
+      return opt.id.trim();
+    }
+  }
   for (const opt of configOptions) {
     if (opt.category === "model" && opt.id.trim().length > 0) {
       return opt.id.trim();

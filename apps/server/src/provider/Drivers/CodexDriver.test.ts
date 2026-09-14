@@ -111,6 +111,98 @@ it.layer(testLayer)("CodexDriver", (it) => {
     }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
   );
 
+  it.effect.skipIf(windowsHost)(
+    "writes the backend model_providers entry into the shadow home, not the shared home",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-driver-backend-" });
+        const sharedHome = NodePath.join(tempDir, "codex-home");
+        const shadowHome = NodePath.join(tempDir, "codex-shadow");
+        yield* fs.makeDirectory(sharedHome, { recursive: true });
+        yield* fs.writeFileString(
+          NodePath.join(sharedHome, "config.toml"),
+          'model = "gpt-5-codex"\n',
+        );
+
+        const instance = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("codex-backend"),
+          displayName: "Codex backend test",
+          enabled: false,
+          // Blank out any host OPENAI_API_KEY so "no key resolves" is
+          // deterministic regardless of the machine running the test.
+          environment: [{ name: "OPENAI_API_KEY", value: "", sensitive: true }],
+          backend: {
+            kind: "openai-compatible",
+            baseUrl: "http://127.0.0.1:20128/v1",
+            models: ["glm-4.6"],
+          },
+          config: {
+            ...CodexDriver.defaultConfig(),
+            binaryPath: NodePath.join(tempDir, "missing", "codex"),
+            homePath: sharedHome,
+            shadowHomePath: shadowHome,
+          },
+        });
+
+        // The shared home stays untouched and the shadow copy holds the merge.
+        const sharedContents = yield* fs.readFileString(NodePath.join(sharedHome, "config.toml"));
+        expect(sharedContents).toBe('model = "gpt-5-codex"\n');
+        const shadowContents = yield* fs.readFileString(NodePath.join(shadowHome, "config.toml"));
+        expect(shadowContents).toContain('model = "gpt-5-codex"');
+        expect(shadowContents).toContain('model_provider = "t3_backend"');
+        expect(shadowContents).toContain("[model_providers.t3_backend]");
+        expect(shadowContents).toContain('base_url = "http://127.0.0.1:20128/v1"');
+        expect(shadowContents).toContain('wire_api = "chat"');
+        // No key resolves (no apiKey, no apiKeyEnv in the environment), so no
+        // env_key lands in the TOML.
+        expect(shadowContents).not.toContain("env_key");
+
+        // Connection models ride the custom-model path into the model list.
+        const snapshot = yield* instance.snapshot.getSnapshot;
+        expect(snapshot.models.map((model) => model.slug)).toContain("glm-4.6");
+        expect(snapshot.models.find((model) => model.slug === "glm-4.6")?.isCustom).toBe(true);
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "leaves the shadow home's config.toml symlinked without a backend",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-driver-native-" });
+        const sharedHome = NodePath.join(tempDir, "codex-home");
+        const shadowHome = NodePath.join(tempDir, "codex-shadow");
+        yield* fs.makeDirectory(sharedHome, { recursive: true });
+        yield* fs.writeFileString(
+          NodePath.join(sharedHome, "config.toml"),
+          'model = "gpt-5-codex"\n',
+        );
+
+        yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("codex-native"),
+          displayName: "Codex native test",
+          enabled: false,
+          environment: [],
+          config: {
+            ...CodexDriver.defaultConfig(),
+            binaryPath: NodePath.join(tempDir, "missing", "codex"),
+            homePath: sharedHome,
+            shadowHomePath: shadowHome,
+          },
+        });
+
+        const configTarget = yield* fs.readLink(NodePath.join(shadowHome, "config.toml"));
+        expect(configTarget).toBe(NodePath.join(sharedHome, "config.toml"));
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
   for (const fixture of [
     {
       name: "leaves mise npm-backend installations manual-only",

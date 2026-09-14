@@ -19,7 +19,8 @@
 - [Remote access](./user/remote-access.md)
 - [Running in the background](./user/background-service.md)
 - [Updating T3 Code](./user/updating.md)
-- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [Hermes](./user/providers-hermes.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md)
+- [Providers](./user/providers.md): instances, API keys, model connections, and routing
+- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [Cline](./user/providers-cline.md) · [Droid](./user/providers-droid.md) · [Devin](./user/providers-devin.md) · [Hermes](./user/providers-hermes.md) · [Kilo](./user/providers-kilo.md) · [OpenCode](./user/providers-opencode.md) · [OpenClaw](./user/providers-openclaw.md) · [Pi](./user/providers-pi.md) · [Antigravity](./user/providers-antigravity.md)
 - [Hermes fork notes](./user/fork.md)
 
 ---

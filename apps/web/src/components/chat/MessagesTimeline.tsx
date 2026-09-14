@@ -33,6 +33,7 @@ import type {
   AgentPanelModel,
   RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+import type { ModelRerouteNotice } from "@t3tools/client-runtime/state/fallback-combo";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import {
   emptyAgentPanelModel,
@@ -43,6 +44,7 @@ import {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 
 const EMPTY_AGENT_PANEL_MODEL = emptyAgentPanelModel();
+const EMPTY_REROUTE_NOTICES: ReadonlyArray<ModelRerouteNotice> = [];
 const NOOP_OPEN_AGENTS = () => {};
 const NOOP_USE_ARTIFACT_TEMPLATE = () => {};
 const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
@@ -99,6 +101,7 @@ import { PREFERRED_HIGHLIGHTER } from "../../lib/syntaxHighlighting";
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
 import { T3Wordmark } from "../T3Wordmark";
 import {
+  ArrowRightLeftIcon,
   BotIcon,
   BrainIcon,
   CheckIcon,
@@ -274,6 +277,9 @@ interface TimelineRowSharedState {
   agentPanelModel: AgentPanelModel;
   expandedSpawnEntryIds: ReadonlySet<string>;
   onOpenAgents: () => void;
+  /** `model.rerouted` notices keyed by turn; assistant rows render the
+   *  matching turn's note above the executed message. */
+  rerouteNotices: ReadonlyArray<ModelRerouteNotice>;
 }
 
 interface TimelineRowActivityState {
@@ -414,6 +420,8 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: CitationHistoryPage | null;
+  /** `model.rerouted` notices derived from thread activities. */
+  rerouteNotices?: ReadonlyArray<ModelRerouteNotice>;
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +470,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  rerouteNotices = EMPTY_REROUTE_NOTICES,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
@@ -877,6 +886,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel: agentPanelModel ?? EMPTY_AGENT_PANEL_MODEL,
       expandedSpawnEntryIds: paintedExpandedSpawnEntryIds,
       onOpenAgents,
+      rerouteNotices,
     }),
     [
       readyCitationRequest,
@@ -904,6 +914,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       agentPanelModel,
       paintedExpandedSpawnEntryIds,
       onOpenAgents,
+      rerouteNotices,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -1849,14 +1860,37 @@ function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-
   );
 }
 
+/**
+ * Small turn-header note for `model.rerouted` fallback hops, rendered above
+ * the executed turn's assistant message. Muted info styling (no animation),
+ * matching the usage-limits banner tone.
+ */
+function ModelRerouteNote({ notice }: { readonly notice: ModelRerouteNotice }) {
+  return (
+    <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+      <ArrowRightLeftIcon className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">
+        Model rerouted: {notice.fromModel} → {notice.toModel} ({notice.reason})
+      </span>
+    </div>
+  );
+}
+
 function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+  const rerouteNotices =
+    row.message.role === "assistant" && row.message.turnId != null
+      ? ctx.rerouteNotices.filter((notice) => notice.turnId === row.message.turnId)
+      : EMPTY_REROUTE_NOTICES;
 
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
         <MessageAuthorHeading>T3 Code</MessageAuthorHeading>
+        {rerouteNotices.map((notice) => (
+          <ModelRerouteNote key={notice.id} notice={notice} />
+        ))}
         <AssistantCitationSource
           messageId={row.message.id}
           {...(ctx.threadRef ? { threadRef: ctx.threadRef } : {})}

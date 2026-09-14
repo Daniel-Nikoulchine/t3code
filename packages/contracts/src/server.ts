@@ -23,6 +23,8 @@ import {
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
+import { ModelBackendConfig, ModelBackendKind } from "./modelBackend.ts";
+import { ModelCredentialId } from "./modelCredentials.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
@@ -185,6 +187,38 @@ export const ServerProviderUpdateState = Schema.Struct({
 });
 export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
+export const ServerProviderBackend = Schema.Struct({
+  kind: ModelBackendKind,
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  viaProxy: Schema.Boolean,
+  capabilitiesDegraded: Schema.optional(Schema.Boolean),
+});
+export type ServerProviderBackend = typeof ServerProviderBackend.Type;
+
+/**
+ * On-demand probe of an unpersisted backend config, usable before saving.
+ * The request carries the candidate config; the result never carries
+ * secrets — failures report only a short status/timeout text. An
+ * `apiKeyCredentialId` is resolved server-side against the secret store, so
+ * connections with stored credentials can be probed without the key ever
+ * reaching the client.
+ */
+export const ServerTestModelBackendRequest = Schema.Struct({
+  backend: ModelBackendConfig,
+  apiKeyCredentialId: Schema.optionalKey(ModelCredentialId),
+});
+export type ServerTestModelBackendRequest = typeof ServerTestModelBackendRequest.Type;
+
+export const ServerTestModelBackendResult = Schema.Struct({
+  ok: Schema.Boolean,
+  modelCount: Schema.optional(NonNegativeInt),
+  /** Slugs decoded from the `/models` payload, when the response carried any. */
+  models: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  error: Schema.optional(TrimmedNonEmptyString),
+  checkedAt: IsoDateTime,
+});
+export type ServerTestModelBackendResult = typeof ServerTestModelBackendResult.Type;
+
 export const ServerProvider = Schema.Struct({
   // Routing key for the configured instance this snapshot represents. This
   // is the only stable identity consumers may use for provider routing.
@@ -225,6 +259,15 @@ export const ServerProvider = Schema.Struct({
   // Human-readable reason populated when `availability === "unavailable"`.
   // Surfaces in the UI alongside the missing-driver affordance.
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
+  // Display-only backend metadata stamped by `withInstanceIdentity`. Absent
+  // means native: legacy snapshots omit this field and consumers treat a
+  // missing backend as a direct (non-proxied) harness connection.
+  backend: Schema.optional(ServerProviderBackend),
+  // Last successful backend verification for this instance in this process.
+  // Absent means never verified (or unknown since restart): the marker is
+  // volatile by design — it is set only by an executed turn, never persisted
+  // to the status cache, and never probed in the background.
+  backendLastVerifiedAt: Schema.optional(IsoDateTime),
   models: Schema.Array(ServerProviderModel),
   slashCommands: Schema.Array(ServerProviderSlashCommand).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -253,6 +296,14 @@ export type ServerProviders = typeof ServerProviders.Type;
  */
 export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
   snapshot.availability !== "unavailable";
+
+/**
+ * Treat an absent `backend` (legacy/native producers) the same as an
+ * explicit native backend: not proxied, capabilities not degraded.
+ * Consumers check this instead of reading `backend?.viaProxy` directly.
+ */
+export const isProviderProxied = (snapshot: ServerProvider): boolean =>
+  snapshot.backend?.viaProxy === true;
 
 export const ServerObservability = Schema.Struct({
   logsDirectoryPath: TrimmedNonEmptyString,

@@ -11,6 +11,7 @@ import type {
   ProviderTurnStartResult,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
@@ -55,6 +56,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
+  ProviderAdapterValidationError,
   ProviderUnsupportedError,
   ProviderValidationError,
   ProviderWorkspaceMissingError,
@@ -64,7 +66,12 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
-import { makeProviderServiceLive } from "./ProviderService.ts";
+import {
+  COMBO_LKG_CAP,
+  makeProviderServiceLive,
+  recordComboLastKnownGood,
+  type ProviderServiceLiveOptions,
+} from "./ProviderService.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -78,6 +85,7 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { runtimeEventToActivities } from "../../orchestration/Layers/ProviderRuntimeIngestion.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
@@ -419,6 +427,7 @@ function makeProviderServiceLayer(
     readonly supportsConversationRollback?: boolean;
     readonly analyticsLayer?: Layer.Layer<AnalyticsService.AnalyticsService>;
     readonly registry?: ProviderAdapterRegistry.ProviderAdapterRegistry["Service"];
+    readonly serviceOptions?: ProviderServiceLiveOptions;
   } = {},
 ) {
   const codex = makeFakeCodexAdapter(CODEX_DRIVER, input.supportsConversationRollback);
@@ -446,7 +455,7 @@ function makeProviderServiceLayer(
 
   const layer = it.layer(
     Layer.mergeAll(
-      makeProviderServiceLive().pipe(
+      makeProviderServiceLive(input.serviceOptions).pipe(
         Layer.provide(NodeServices.layer),
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
@@ -5144,7 +5153,512 @@ describe("agent browser access", () => {
         { device: false },
         { withoutOrchestration: true },
       );
-      assert.deepEqual(issued, [{ threadId, capabilities: ["preview", "pull-requests"] }]);
+      assert.deepEqual(issued, [{ threadId, capabilities: ["device", "pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+});
+
+const comboInstanceA = ProviderInstanceId.make("combo-a");
+const comboInstanceB = ProviderInstanceId.make("combo-b");
+const comboInstanceC = ProviderInstanceId.make("combo-c");
+
+function makeComboFallbackHarness(serviceOptions?: ProviderServiceLiveOptions) {
+  const primary = makeFakeCodexAdapter();
+  const fallback = makeFakeCodexAdapter();
+  const tertiary = makeFakeCodexAdapter();
+  const registry = makeStaticInstanceRegistry([
+    [comboInstanceA, primary.adapter],
+    [comboInstanceB, fallback.adapter],
+    [comboInstanceC, tertiary.adapter],
+  ]);
+  const { layer } = makeProviderServiceLayer(
+    serviceOptions === undefined ? { registry } : { registry, serviceOptions },
+  );
+  return { primary, fallback, tertiary, layer };
+}
+
+const comboLimits = (usedPercent: number): ServerProviderUsageLimits => ({
+  checkedAt: "2026-01-01T00:00:00.000Z",
+  windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent }],
+});
+
+const failComboSendTurnWith = (
+  sendTurn: ReturnType<typeof makeFakeCodexAdapter>["sendTurn"],
+  detail: string,
+) =>
+  sendTurn.mockImplementation(() =>
+    Effect.fail(
+      new ProviderAdapterRequestError({
+        provider: "codex",
+        method: "sendTurn",
+        detail,
+      }),
+    ),
+  );
+
+const succeedComboSendTurnWith = (
+  sendTurn: ReturnType<typeof makeFakeCodexAdapter>["sendTurn"],
+  turnId: string,
+) =>
+  sendTurn.mockImplementation((input: ProviderSendTurnInput) =>
+    Effect.succeed({ threadId: input.threadId, turnId: asTurnId(turnId) }),
+  );
+
+const seedComboSessions = (
+  harness: Pick<ReturnType<typeof makeComboFallbackHarness>, "fallback" | "tertiary">,
+  threadId: ThreadId,
+) =>
+  Effect.gen(function* () {
+    yield* harness.fallback.adapter.startSession({
+      threadId,
+      runtimeMode: "auto",
+      providerInstanceId: comboInstanceB,
+    });
+    yield* harness.tertiary.adapter.startSession({
+      threadId,
+      runtimeMode: "auto",
+      providerInstanceId: comboInstanceC,
+    });
+  });
+
+/**
+ * Subscribe-then-collect without sleeps or polling: every `model.rerouted`
+ * emission is published synchronously inside `sendTurn`, so by the time the
+ * turn resolves the events are already buffered and a bounded cooperative
+ * drain is deterministic. Resolves to null when nothing was published, which
+ * keeps the red phase (no fallback yet) fast instead of hanging the suite.
+ */
+const collectPublishedEvents = <A, E>(collector: Fiber.Fiber<A, E>) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 250; attempt += 1) {
+      const settled = yield* Effect.sync(() => collector.pollUnsafe());
+      if (settled !== undefined) return settled;
+      yield* Effect.yieldNow;
+    }
+    yield* Fiber.interrupt(collector);
+    return null;
+  });
+
+const subscribeRuntimeEvents = (
+  provider: {
+    readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+  },
+  take: number,
+) =>
+  Effect.gen(function* () {
+    const collector = yield* Stream.take(provider.streamEvents, take).pipe(
+      Stream.runCollect,
+      Effect.forkChild,
+    );
+    for (let warmup = 0; warmup < 5; warmup += 1) yield* Effect.yieldNow;
+    return collector;
+  });
+
+{
+  const harness = makeComboFallbackHarness();
+  harness.layer("sendTurn fallback combo: priority strategy", (it) => {
+    it.effect("falls back to the next target on a retryable failure", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-combo-priority-fallback");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: comboInstanceA,
+          threadId,
+          runtimeMode: "auto",
+        });
+        yield* seedComboSessions(harness, threadId);
+        failComboSendTurnWith(
+          harness.primary.sendTurn,
+          "429 Too Many Requests: rate limit exceeded, retry later",
+        );
+        succeedComboSendTurnWith(harness.fallback.sendTurn, "turn-combo-b");
+        const collector = yield* subscribeRuntimeEvents(provider, 1);
+
+        const turn = yield* provider.sendTurn({
+          threadId,
+          input: "combo hello",
+          combo: {
+            targets: [
+              createModelSelection(comboInstanceA, "model-a"),
+              createModelSelection(comboInstanceB, "model-b"),
+            ],
+            strategy: "priority",
+            fallbackOn: ["rate-limit", "provider-error"],
+          },
+        });
+
+        const outcome = yield* collectPublishedEvents(collector);
+        assert.equal(turn.turnId, "turn-combo-b");
+        assert.equal(harness.primary.sendTurn.mock.calls.length, 1);
+        assert.equal(harness.fallback.sendTurn.mock.calls.length, 1);
+        assert.equal(
+          (harness.primary.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput | undefined)
+            ?.modelSelection?.model,
+          "model-a",
+        );
+        assert.equal(
+          (harness.fallback.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput | undefined)
+            ?.modelSelection?.model,
+          "model-b",
+        );
+        if (outcome === null || !Exit.isSuccess(outcome)) {
+          throw new Error("expected one published model.rerouted event");
+        }
+        const events = [...outcome.value];
+        assert.equal(events.length, 1);
+        const rerouted = events[0];
+        assert.equal(rerouted?.type, "model.rerouted");
+        if (rerouted?.type === "model.rerouted") {
+          assert.equal(rerouted.payload.fromModel, "model-a");
+          assert.equal(rerouted.payload.toModel, "model-b");
+          assert.match(rerouted.payload.reason, /rate-limit/);
+          assert.match(rerouted.payload.reason, /429/);
+          // The hop must carry the executed turn's id so ingestion stamps
+          // the activity with a non-null turnId and the timeline (which
+          // filters notices on `notice.turnId === row.message.turnId`) renders it.
+          assert.equal(rerouted.turnId, "turn-combo-b");
+          // Seam: the loop's published event through the ingestion helper
+          // must yield an activity joinable to the executed turn.
+          const [activity] = runtimeEventToActivities(rerouted);
+          assert.equal(activity?.kind, "model.rerouted");
+          assert.equal(activity?.turnId, "turn-combo-b");
+          assert.deepEqual(activity?.payload, {
+            fromModel: "model-a",
+            toModel: "model-b",
+            reason: rerouted.payload.reason,
+          });
+        }
+      }),
+    );
+  });
+}
+
+{
+  const harness = makeComboFallbackHarness();
+  harness.layer("sendTurn fallback combo: terminal errors", (it) => {
+    it.effect("does not fall back on a terminal validation error", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-combo-terminal-error");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: comboInstanceA,
+          threadId,
+          runtimeMode: "auto",
+        });
+        yield* seedComboSessions(harness, threadId);
+        harness.primary.sendTurn.mockImplementation(() =>
+          Effect.fail(
+            new ProviderAdapterValidationError({
+              provider: "codex",
+              operation: "sendTurn",
+              issue: "model 'model-a' is not supported by this harness",
+            }),
+          ),
+        );
+        const collector = yield* subscribeRuntimeEvents(provider, 1);
+
+        const error = yield* provider
+          .sendTurn({
+            threadId,
+            input: "combo hello",
+            combo: {
+              targets: [
+                createModelSelection(comboInstanceA, "model-a"),
+                createModelSelection(comboInstanceB, "model-b"),
+              ],
+              strategy: "priority",
+              fallbackOn: ["rate-limit", "provider-error"],
+            },
+          })
+          .pipe(Effect.flip);
+
+        assert.equal((error as { readonly _tag?: string })._tag, "ProviderAdapterValidationError");
+        assert.equal(harness.primary.sendTurn.mock.calls.length, 1);
+        assert.equal(harness.fallback.sendTurn.mock.calls.length, 0);
+        assert.equal(yield* collectPublishedEvents(collector), null);
+      }),
+    );
+  });
+}
+
+{
+  const harness = makeComboFallbackHarness();
+  harness.layer("sendTurn fallback combo: no combo", (it) => {
+    it.effect("keeps legacy behavior without a combo", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-combo-no-combo");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: comboInstanceA,
+          threadId,
+          runtimeMode: "auto",
+        });
+        yield* seedComboSessions(harness, threadId);
+        failComboSendTurnWith(
+          harness.primary.sendTurn,
+          "429 Too Many Requests: rate limit exceeded, retry later",
+        );
+        const collector = yield* subscribeRuntimeEvents(provider, 1);
+
+        const error = yield* provider
+          .sendTurn({
+            threadId,
+            input: "plain hello",
+            modelSelection: createModelSelection(comboInstanceA, "model-a"),
+          })
+          .pipe(Effect.flip);
+
+        assert.equal((error as { readonly _tag?: string })._tag, "ProviderAdapterRequestError");
+        assert.equal(harness.primary.sendTurn.mock.calls.length, 1);
+        assert.equal(harness.fallback.sendTurn.mock.calls.length, 0);
+        assert.equal(yield* collectPublishedEvents(collector), null);
+      }),
+    );
+  });
+}
+
+{
+  const harness = makeComboFallbackHarness();
+  harness.layer("sendTurn fallback combo: exhausted targets", (it) => {
+    it.effect("fails with the last error when every target is retryable", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-combo-all-retryable");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: comboInstanceA,
+          threadId,
+          runtimeMode: "auto",
+        });
+        yield* seedComboSessions(harness, threadId);
+        failComboSendTurnWith(
+          harness.primary.sendTurn,
+          "429 Too Many Requests: rate limit exceeded, retry later",
+        );
+        failComboSendTurnWith(harness.fallback.sendTurn, "503 Service Unavailable: bad gateway");
+        failComboSendTurnWith(
+          harness.tertiary.sendTurn,
+          "500 Internal Server Error: upstream exploded",
+        );
+        const collector = yield* subscribeRuntimeEvents(provider, 2);
+
+        const error = yield* provider
+          .sendTurn({
+            threadId,
+            input: "combo hello",
+            combo: {
+              targets: [
+                createModelSelection(comboInstanceA, "model-a"),
+                createModelSelection(comboInstanceB, "model-b"),
+                createModelSelection(comboInstanceC, "model-c"),
+              ],
+              strategy: "priority",
+              fallbackOn: ["rate-limit", "provider-error"],
+            },
+          })
+          .pipe(Effect.flip);
+
+        assert.equal((error as { readonly _tag?: string })._tag, "ProviderAdapterRequestError");
+        assert.match((error as { readonly detail?: string }).detail ?? "", /exploded/);
+        assert.equal(harness.primary.sendTurn.mock.calls.length, 1);
+        assert.equal(harness.fallback.sendTurn.mock.calls.length, 1);
+        assert.equal(harness.tertiary.sendTurn.mock.calls.length, 1);
+        const outcome = yield* collectPublishedEvents(collector);
+        if (outcome === null || !Exit.isSuccess(outcome)) {
+          throw new Error("expected two published model.rerouted events");
+        }
+        const events = [...outcome.value];
+        assert.equal(events.length, 2);
+        const first = events[0];
+        const second = events[1];
+        assert.equal(first?.type, "model.rerouted");
+        assert.equal(second?.type, "model.rerouted");
+        if (first?.type === "model.rerouted" && second?.type === "model.rerouted") {
+          assert.equal(first.payload.fromModel, "model-a");
+          assert.equal(first.payload.toModel, "model-b");
+          assert.match(first.payload.reason, /rate-limit/);
+          assert.equal(second.payload.fromModel, "model-b");
+          assert.equal(second.payload.toModel, "model-c");
+          assert.match(second.payload.reason, /provider-error/);
+          // Exhaustion is analytics-only: with no executed turn there is no
+          // turnId to stamp, so the timeline (which joins notices on a
+          // non-null turnId) drops these while metrics/analytics still see them.
+          assert.equal(first.turnId, undefined);
+          assert.equal(second.turnId, undefined);
+          const [firstActivity] = runtimeEventToActivities(first);
+          const [secondActivity] = runtimeEventToActivities(second);
+          assert.equal(firstActivity?.turnId, null);
+          assert.equal(secondActivity?.turnId, null);
+        }
+      }),
+    );
+  });
+}
+
+{
+  const harness = makeComboFallbackHarness();
+  harness.layer("sendTurn fallback combo: headroom strategy", (it) => {
+    it.effect("keeps priority order when no usage-limit snapshots are known", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-combo-headroom-unknown");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: comboInstanceA,
+          threadId,
+          runtimeMode: "auto",
+        });
+        yield* seedComboSessions(harness, threadId);
+        failComboSendTurnWith(
+          harness.primary.sendTurn,
+          "429 Too Many Requests: rate limit exceeded, retry later",
+        );
+        succeedComboSendTurnWith(harness.fallback.sendTurn, "turn-combo-b");
+        const collector = yield* subscribeRuntimeEvents(provider, 1);
+
+        const turn = yield* provider.sendTurn({
+          threadId,
+          input: "combo hello",
+          combo: {
+            targets: [
+              createModelSelection(comboInstanceA, "model-a"),
+              createModelSelection(comboInstanceB, "model-b"),
+            ],
+            strategy: "headroom",
+            fallbackOn: ["rate-limit", "provider-error"],
+          },
+        });
+
+        assert.equal(turn.turnId, "turn-combo-b");
+        const orderA = harness.primary.sendTurn.mock.invocationCallOrder[0] ?? -1;
+        const orderB = harness.fallback.sendTurn.mock.invocationCallOrder[0] ?? -1;
+        assert.equal(orderA >= 0 && orderB >= 0 && orderA < orderB, true);
+        const outcome = yield* collectPublishedEvents(collector);
+        if (outcome === null || !Exit.isSuccess(outcome)) {
+          throw new Error("expected one published model.rerouted event");
+        }
+        assert.equal([...outcome.value].length, 1);
+      }),
+    );
+  });
+}
+
+{
+  const harness = makeComboFallbackHarness({
+    resolveComboUsageLimits: (instanceId) =>
+      instanceId === comboInstanceB
+        ? comboLimits(10)
+        : instanceId === comboInstanceA
+          ? comboLimits(90)
+          : undefined,
+  });
+  harness.layer("sendTurn fallback combo: headroom with quota data", (it) => {
+    it.effect("prefers the target with the most remaining quota", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-combo-headroom-known");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: comboInstanceA,
+          threadId,
+          runtimeMode: "auto",
+        });
+        yield* seedComboSessions(harness, threadId);
+        succeedComboSendTurnWith(harness.fallback.sendTurn, "turn-combo-b");
+        const collector = yield* subscribeRuntimeEvents(provider, 1);
+
+        const turn = yield* provider.sendTurn({
+          threadId,
+          input: "combo hello",
+          combo: {
+            targets: [
+              createModelSelection(comboInstanceA, "model-a"),
+              createModelSelection(comboInstanceB, "model-b"),
+            ],
+            strategy: "headroom",
+            fallbackOn: ["rate-limit", "provider-error"],
+          },
+        });
+
+        assert.equal(turn.turnId, "turn-combo-b");
+        assert.equal(harness.fallback.sendTurn.mock.calls.length, 1);
+        assert.equal(harness.primary.sendTurn.mock.calls.length, 0);
+        assert.equal(
+          (harness.fallback.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput | undefined)
+            ?.modelSelection?.model,
+          "model-b",
+        );
+        assert.equal(yield* collectPublishedEvents(collector), null);
+      }),
+    );
+  });
+}
+
+{
+  const harness = makeComboFallbackHarness();
+  harness.layer("sendTurn fallback combo: lkgp strategy", (it) => {
+    it.effect("sticks to the last known good target", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService.ProviderService;
+        const threadId = asThreadId("thread-combo-lkgp-sticky");
+        yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: comboInstanceA,
+          threadId,
+          runtimeMode: "auto",
+        });
+        yield* seedComboSessions(harness, threadId);
+        failComboSendTurnWith(
+          harness.primary.sendTurn,
+          "429 Too Many Requests: rate limit exceeded, retry later",
+        );
+        succeedComboSendTurnWith(harness.fallback.sendTurn, "turn-combo-b");
+        const firstCollector = yield* subscribeRuntimeEvents(provider, 1);
+        const combo = {
+          targets: [
+            createModelSelection(comboInstanceA, "model-a"),
+            createModelSelection(comboInstanceB, "model-b"),
+          ],
+          strategy: "lkgp" as const,
+          fallbackOn: ["rate-limit", "provider-error"] as Array<"rate-limit" | "provider-error">,
+        };
+
+        const first = yield* provider.sendTurn({ threadId, input: "combo hello", combo });
+        assert.equal(first.turnId, "turn-combo-b");
+        const firstOutcome = yield* collectPublishedEvents(firstCollector);
+        if (firstOutcome === null || !Exit.isSuccess(firstOutcome)) {
+          throw new Error("expected one published model.rerouted event");
+        }
+        assert.equal([...firstOutcome.value].length, 1);
+
+        harness.primary.sendTurn.mockClear();
+        harness.fallback.sendTurn.mockClear();
+        const secondCollector = yield* subscribeRuntimeEvents(provider, 1);
+
+        const second = yield* provider.sendTurn({ threadId, input: "combo hello again", combo });
+        assert.equal(second.turnId, "turn-combo-b");
+        assert.equal(harness.fallback.sendTurn.mock.calls.length, 1);
+        assert.equal(harness.primary.sendTurn.mock.calls.length, 0);
+        assert.equal(yield* collectPublishedEvents(secondCollector), null);
+      }),
+    );
+  });
+}
+
+describe("sendTurn fallback combo: last-known-good cap", () => {
+  it("evicts the oldest thread once more than COMBO_LKG_CAP threads record", () => {
+    const table: Parameters<typeof recordComboLastKnownGood>[0] = new Map();
+    for (let n = 0; n < COMBO_LKG_CAP + 1; n += 1) {
+      recordComboLastKnownGood(table, asThreadId(`thread-combo-lkg-cap-${n}`), {
+        instanceId: comboInstanceA,
+        model: "model-a",
+      });
+    }
+    assert.equal(table.size, COMBO_LKG_CAP);
+    assert.equal(table.has(asThreadId("thread-combo-lkg-cap-0")), false);
+    assert.equal(table.has(asThreadId(`thread-combo-lkg-cap-${COMBO_LKG_CAP}`)), true);
+  });
 });

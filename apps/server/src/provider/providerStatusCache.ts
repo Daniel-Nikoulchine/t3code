@@ -37,9 +37,17 @@ const BUILT_IN_DRIVER_ORDER: ReadonlyArray<string> = [
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "grok",
+  "deepseek",
+  "kilo",
+  "copilot",
+  "hermes",
   "opencode",
+  "omp",
   "antigravity",
+  "pi",
+  "zcode",
 ];
 
 const driverRank = (driver: string): number => {
@@ -81,6 +89,9 @@ export const hydrateCachedProvider = (input: {
   }
 
   const { message: _fallbackMessage, ...fallbackWithoutMessage } = input.fallbackProvider;
+  // `backendLastVerifiedAt` rides the fallback (absent on a fresh probe =
+  // unknown since restart), exactly like `backend`: a timestamp cached by a
+  // previous process must never resurrect here.
   const hydratedProvider: ServerProvider = {
     ...fallbackWithoutMessage,
     models: mergeProviderModels(input.fallbackProvider.models, input.cachedProvider.models),
@@ -152,7 +163,15 @@ export const writeProviderStatusCache = (input: {
   readonly filePath: string;
   readonly provider: ServerProvider;
 }) => {
-  const { updateState: _updateState, ...cacheableProvider } = input.provider;
+  // `updateState` and `backendLastVerifiedAt` are volatile runtime state,
+  // never probe results: a marker read back after a restart would claim a
+  // verification this process never observed. Hydration therefore takes the
+  // field from the fresh fallback (like `backend`), never from the cache.
+  const {
+    updateState: _updateState,
+    backendLastVerifiedAt: _backendLastVerifiedAt,
+    ...cacheableProvider
+  } = input.provider;
   return writeFileStringAtomically({
     filePath: input.filePath,
     contents: `${JSON.stringify(cacheableProvider, null, 2)}\n`,

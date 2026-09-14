@@ -36,6 +36,15 @@ export const ModelListRow = memo(function ModelListRow(props: {
   useTriggerLabel?: boolean;
   showNewBadge?: boolean;
   unavailable?: boolean;
+  /** The owning instance routes through an external model backend (proxy). */
+  viaProxy?: boolean;
+  /** The proxy degrades model capabilities — surfaced as a tooltip. */
+  capabilitiesDegraded?: boolean;
+  /**
+   * The pairing is served through the instance's own subscription auth rather
+   * than an API key — a hint that routing behavior differs, not a block.
+   */
+  subscription?: boolean;
   jumpLabel?: string | null;
   disabledReason?: string | null;
   onToggleFavorite: () => void;
@@ -80,6 +89,31 @@ export const ModelListRow = memo(function ModelListRow(props: {
           {props.unavailable ? (
             <Badge variant="outline" size="sm">
               Unavailable
+            </Badge>
+          ) : null}
+          {props.viaProxy ? (
+            props.capabilitiesDegraded ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Badge variant="outline" size="sm">
+                      via provider
+                    </Badge>
+                  }
+                />
+                <TooltipPopup side="top" align="center">
+                  Capabilities degraded
+                </TooltipPopup>
+              </Tooltip>
+            ) : (
+              <Badge variant="outline" size="sm">
+                via provider
+              </Badge>
+            )
+          ) : null}
+          {props.subscription ? (
+            <Badge variant="outline" size="sm">
+              Subscription
             </Badge>
           ) : null}
         </div>

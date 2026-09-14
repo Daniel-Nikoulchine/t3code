@@ -43,6 +43,15 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("tests model backends under the same scope as device host probes", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverTestModelBackend)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverTestModelBackend)).toBe(
+      requiredScopeForRpcMethod(WS_METHODS.deviceTestHost),
+    );
+  });
+
   it("requires write access to import agent session history", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.agentSessionsScan)).toBe(
       AuthOrchestrationReadScope,

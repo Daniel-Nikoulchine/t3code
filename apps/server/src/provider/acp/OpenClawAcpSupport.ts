@@ -1,0 +1,127 @@
+import { type OpenClawSettings } from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as EffectAcpErrors from "effect-acp/errors";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
+
+import { spawnAndCollect } from "../providerSnapshot.ts";
+
+import * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
+
+const OPENCLAW_AUTH_METHOD = "openclaw-setup";
+
+type OpenClawAcpSettings = Pick<OpenClawSettings, "binaryPath"> &
+  Partial<Pick<OpenClawSettings, "gatewayUrl" | "gatewayToken" | "sessionKey">>;
+
+interface OpenClawAcpRuntimeInput extends Omit<
+  AcpSessionRuntime.AcpSessionRuntimeOptions,
+  "authMethodId" | "spawn"
+> {
+  readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
+  readonly openclawSettings: OpenClawAcpSettings;
+  readonly environment?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Build the spawn input for `openclaw acp`, the Gateway-backed ACP bridge.
+ *
+ * Optional gateway connection flags are appended only when configured:
+ * - `gatewayUrl` -> `--url <url>`
+ * - `gatewayToken` -> `--token <token>`
+ * - `sessionKey` -> `--session <key>`
+ *
+ * When unset, the bridge falls back to OpenClaw's own config
+ * (`gateway.remote.url`) and ambient auth (`OPENCLAW_GATEWAY_TOKEN`), so an
+ * empty settings form still works for default local gateways.
+ */
+export function buildOpenClawAcpSpawnArgs(settings: OpenClawAcpSettings): ReadonlyArray<string> {
+  const args = ["acp"];
+  const gatewayUrl = settings.gatewayUrl?.trim();
+  if (gatewayUrl) {
+    args.push("--url", gatewayUrl);
+  }
+  const gatewayToken = settings.gatewayToken?.trim();
+  if (gatewayToken) {
+    args.push("--token", gatewayToken);
+  }
+  const sessionKey = settings.sessionKey?.trim();
+  if (sessionKey) {
+    args.push("--session", sessionKey);
+  }
+  return args;
+}
+
+export function buildOpenClawAcpSpawnInput(
+  settings: OpenClawAcpSettings,
+  cwd: string,
+  environment?: NodeJS.ProcessEnv,
+): AcpSessionRuntime.AcpSpawnInput {
+  return {
+    command: settings.binaryPath || "openclaw",
+    args: [...buildOpenClawAcpSpawnArgs(settings)],
+    cwd,
+    ...(environment ? { env: environment } : {}),
+  };
+}
+
+export const makeOpenClawAcpRuntime = (
+  input: OpenClawAcpRuntimeInput,
+): Effect.Effect<
+  AcpSessionRuntime.AcpSessionRuntime["Service"],
+  EffectAcpErrors.AcpError,
+  Crypto.Crypto | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(
+      AcpSessionRuntime.layer({
+        ...input,
+        spawn: buildOpenClawAcpSpawnInput(input.openclawSettings, input.cwd, input.environment),
+        authMethodId: OPENCLAW_AUTH_METHOD,
+      }).pipe(
+        Layer.provide(
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
+        ),
+      ),
+    );
+    return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(Effect.provide(context));
+  });
+
+export function resolveOpenClawModelId(model: string | null | undefined): string | undefined {
+  const value = model?.trim();
+  return value && value !== "default" ? value : undefined;
+}
+
+export function applyOpenClawAcpModelSelection<E>(input: {
+  readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setSessionModel">;
+  readonly model: string | null | undefined;
+  readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
+}): Effect.Effect<void, E> {
+  const modelId = resolveOpenClawModelId(input.model);
+  return modelId
+    ? input.runtime.setSessionModel(modelId).pipe(Effect.mapError(input.mapError))
+    : Effect.void;
+}
+
+export const deleteOpenClawSession = Effect.fn("deleteOpenClawSession")(function* (input: {
+  readonly settings: OpenClawAcpSettings;
+  readonly sessionId: string;
+  readonly environment?: NodeJS.ProcessEnv;
+}) {
+  const command = input.settings.binaryPath || "openclaw";
+  const spawnCommand = yield* resolveSpawnCommand(
+    command,
+    ["sessions", "delete", input.sessionId, "--yes"],
+    input.environment ? { env: input.environment } : {},
+  );
+  return yield* spawnAndCollect(
+    command,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      ...(input.environment ? { env: input.environment } : {}),
+      shell: spawnCommand.shell,
+    }),
+  );
+});

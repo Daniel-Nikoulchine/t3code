@@ -11,10 +11,18 @@ import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 export type TextGenerationProvider =
   | "codex"
   | "claudeAgent"
+  | "cline"
   | "cursor"
+  | "devin"
+  | "droid"
   | "grok"
+  | "deepseek"
   | "hermes"
-  | "opencode";
+  | "kilo"
+  | "omp"
+  | "opencode"
+  | "pi"
+  | "zcode";
 
 export interface CommitMessageGenerationInput {
   cwd: string;

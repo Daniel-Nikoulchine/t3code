@@ -132,6 +132,7 @@ function LocalSettingsRouteScreen() {
             value={`${environmentCount}`}
             target="SettingsEnvironments"
           />
+          <SettingsRow icon="server.rack" label="Providers" target="SettingsProviders" />
         </SettingsSection>
 
         <GeneralSettingsSection />
@@ -514,6 +515,7 @@ function ConfiguredSettingsRouteScreen() {
             value={`${environmentCount}`}
             target="SettingsEnvironments"
           />
+          <SettingsRow icon="server.rack" label="Providers" target="SettingsProviders" />
           <SettingsSwitchRow
             icon="bell.badge"
             label="Device Notifications"

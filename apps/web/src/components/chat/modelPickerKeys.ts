@@ -2,6 +2,22 @@ import type { ProviderInstanceId } from "@t3tools/contracts";
 
 const MODEL_KEY_PREFIX = "model:";
 const LEGACY_SECTION_KEY_PREFIX = "legacy-models:";
+const LOGICAL_MODEL_KEY_PREFIX = "logical-model:";
+
+/**
+ * Key of a logical (pooled) model row in the model-first picker. Committing
+ * resolves it to one concrete source pairing, so logical keys never become
+ * selection values — the combobox value stays a {@link modelPickerModelKey}.
+ */
+export function modelPickerLogicalModelKey(modelId: string): string {
+  return `${LOGICAL_MODEL_KEY_PREFIX}${modelId}`;
+}
+
+export function parseModelPickerLogicalModelKey(key: string): string | null {
+  return key.startsWith(LOGICAL_MODEL_KEY_PREFIX)
+    ? key.slice(LOGICAL_MODEL_KEY_PREFIX.length)
+    : null;
+}
 
 export function modelPickerModelKey(instanceId: ProviderInstanceId, slug: string): string {
   return `${MODEL_KEY_PREFIX}${instanceId.length}:${instanceId}${slug}`;
@@ -45,3 +61,11 @@ export function parseModelPickerLegacySectionKey(key: string): ProviderInstanceI
     ? (key.slice(LEGACY_SECTION_KEY_PREFIX.length) as ProviderInstanceId)
     : null;
 }
+
+/**
+ * The model-first picker pools legacy models across instances, so its
+ * collapsed section has no instance id. Handle this key before
+ * {@link parseModelPickerLegacySectionKey} — the raw suffix is not an
+ * instance id.
+ */
+export const LOGICAL_LEGACY_SECTION_KEY = `${LEGACY_SECTION_KEY_PREFIX}logical`;

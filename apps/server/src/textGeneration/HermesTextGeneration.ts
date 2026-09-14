@@ -24,6 +24,7 @@ import {
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
 import {
+  advertisedHermesModelIds,
   applyHermesAcpModelSelection,
   deleteHermesSession,
   makeHermesAcpRuntime,
@@ -106,6 +107,7 @@ export const makeHermesTextGeneration = Effect.fn("makeHermesTextGeneration")(fu
         yield* applyHermesAcpModelSelection({
           runtime,
           model: modelSelection.model,
+          advertisedModels: advertisedHermesModelIds(started.sessionSetupResult.models),
           mapError: (cause) =>
             new TextGenerationError({
               operation,

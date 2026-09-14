@@ -3,12 +3,15 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
+  isProviderProxied,
+  type ModelBackendConnectionId,
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
+import { deriveModelCatalog, type LogicalModel } from "@t3tools/client-runtime/model-catalog";
 import {
   type CustomModelDefinition,
   createModelSelection,
@@ -89,6 +92,30 @@ export interface AppModelOption {
   isDefault?: boolean;
   isLegacy?: boolean;
   isUnavailable?: boolean;
+  /** Mirrors `ModelEsque.viaProxy`: set when the owning instance routes
+   *  through an external model backend (see `getAppModelOptionsForInstance`). */
+  viaProxy?: boolean;
+  /** Mirrors `ModelEsque.capabilitiesDegraded`. */
+  capabilitiesDegraded?: boolean;
+}
+
+/**
+ * Overlay the owning instance's backend routing flags onto every option.
+ * The snapshot is the source of truth (`isProviderProxied` + the
+ * display-only `capabilitiesDegraded` stamp), so custom rows and the
+ * unavailable-selection fallback inherit the badge without per-model data.
+ */
+export function withInstanceBackendFlags(
+  options: ReadonlyArray<AppModelOption>,
+  snapshot: ServerProvider,
+): AppModelOption[] {
+  if (!isProviderProxied(snapshot)) return [...options];
+  const degraded = snapshot.backend?.capabilitiesDegraded === true;
+  return options.map((option) => ({
+    ...option,
+    viaProxy: true,
+    ...(degraded ? { capabilitiesDegraded: true as const } : {}),
+  }));
 }
 
 function appendUnavailableDynamicModelSelection(
@@ -263,13 +290,14 @@ export function getAppModelOptionsForInstance(
   }
 
   const preferences = readInstanceModelPreferences(settings, entry.instanceId);
-  return appendUnavailableDynamicModelSelection(
+  const resolved = appendUnavailableDynamicModelSelection(
     applyInstanceModelPreferences(options, preferences),
     entry.models,
     entry.driverKind,
     selectedModel,
     preferences.hiddenModels,
   );
+  return withInstanceBackendFlags(resolved, entry.snapshot);
 }
 
 export function resolveAppModelSelection(
@@ -322,6 +350,65 @@ export function resolveAppModelSelectionForInstance(
     }
   }
   return options.find((option) => option.isDefault)?.slug ?? options[0]?.slug ?? null;
+}
+
+/**
+ * Model to use when the user switches harness (instance) via the standalone
+ * harness picker. Keeps the current model when the target harness offers it
+ * and it is available; otherwise falls back to the target's default model,
+ * then its first available non-legacy model, then its first available model.
+ */
+export function resolveHarnessSwitchModel(
+  options: ReadonlyArray<Pick<AppModelOption, "slug" | "isDefault" | "isLegacy" | "isUnavailable">>,
+  currentModel: string | null | undefined,
+): string | undefined {
+  if (
+    currentModel &&
+    options.some((option) => option.slug === currentModel && !option.isUnavailable)
+  ) {
+    return currentModel;
+  }
+  return (
+    options.find((option) => option.isDefault && !option.isUnavailable)?.slug ??
+    options.find((option) => !option.isUnavailable && !option.isLegacy)?.slug ??
+    options.find((option) => !option.isUnavailable)?.slug ??
+    options[0]?.slug
+  );
+}
+
+/**
+ * Per-instance link into the model backend connections map, mirrored from
+ * `settings.providerInstances[*].connectionId`. Provider snapshots do not
+ * carry the link, so catalog derivation needs it as its own input.
+ */
+export function providerInstanceConnectionMap(
+  settings: UnifiedSettings,
+): Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> {
+  const out: Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> = {};
+  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+    if (instance.connectionId) {
+      out[ProviderInstanceId.make(instanceId)] = instance.connectionId;
+    }
+  }
+  return out;
+}
+
+/**
+ * Logical models pooled across the given provider instances, with the model
+ * backend connections from settings. Callers pass the same snapshots the
+ * pickers consume — for the composer that is the settings-corrected instance
+ * entries, since a snapshot's `enabled` can lag a settings write. See
+ * `deriveModelCatalog` for the grouping rules.
+ */
+export function deriveAppModelCatalog(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+): LogicalModel[] {
+  return deriveModelCatalog({
+    providers,
+    connections: settings.modelBackendConnections,
+    instanceConnections: providerInstanceConnectionMap(settings),
+  });
 }
 
 /**

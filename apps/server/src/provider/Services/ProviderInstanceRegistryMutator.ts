@@ -28,7 +28,11 @@
  *
  * @module provider/Services/ProviderInstanceRegistryMutator
  */
-import type { ProviderInstanceConfigMap } from "@t3tools/contracts";
+import type {
+  ModelBackendConnections,
+  ModelCredentials,
+  ProviderInstanceConfigMap,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
@@ -42,8 +46,20 @@ export interface ProviderInstanceRegistryMutatorShape {
    * same way boot-time failures are handled by
    * `makeProviderInstanceRegistry`. This keeps settings-watcher loops from
    * erroring out on a single bad entry.
+   *
+   * `connections` is the current `ServerSettings.modelBackendConnections`
+   * map (absent = no connections). `credentials` is the current
+   * `ServerSettings.modelCredentials` map (absent = no credentials). A
+   * change to either rebuilds exactly the instances whose resolved backend
+   * moved — including credential value changes and removals reaching
+   * instances through `ModelProxyConfig.apiKeyCredentialId`. Direct
+   * instances and instances on untouched connections/credentials are kept.
    */
-  readonly reconcile: (configMap: ProviderInstanceConfigMap) => Effect.Effect<void>;
+  readonly reconcile: (
+    configMap: ProviderInstanceConfigMap,
+    connections?: ModelBackendConnections,
+    credentials?: ModelCredentials,
+  ) => Effect.Effect<void>;
 }
 
 export class ProviderInstanceRegistryMutator extends Context.Service<

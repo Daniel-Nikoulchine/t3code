@@ -4,6 +4,12 @@ T3 Code uses Claude Code's login and configuration. Start with the default provi
 for one account; [provider setup](./install.md#providers) covers installation and
 shared provider settings.
 
+To run Claude against an Anthropic-compatible endpoint with a stored API key
+instead of your subscription login, attach the instance to a model backend
+connection in Settings → Providers. See
+[Providers](./providers.md#model-backend-connections) — the environment-variable
+setups below still work.
+
 ## Separate accounts or configurations
 
 Use a separate Claude config directory for each account. This also works for named

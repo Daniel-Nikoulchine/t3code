@@ -54,6 +54,7 @@ import * as ModelManifest from "../ModelManifest.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
@@ -67,9 +68,11 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 import {
+  codexBackendWiresProvider,
   codexContinuationIdentity,
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
+  writeCodexBackendShadowConfig,
 } from "./CodexHomeLayout.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -124,7 +127,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   },
   configSchema: CodexSettings,
   defaultConfig: (): CodexSettings => decodeCodexSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const resetCreditCoordinator = yield* CodexResetCreditCoordinator;
@@ -134,7 +137,10 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const processEnv = {
+        ...mergeProviderInstanceEnvironment(environment),
+        ...resolveModelBackendEnvironment(backend, process.env),
+      };
       const homeLayout = yield* resolveCodexHomeLayout(config);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
       const stampIdentity = withInstanceIdentity({
@@ -143,8 +149,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        ...(backend === undefined ? {} : { backend }),
       });
-      yield* materializeCodexShadowHome(homeLayout).pipe(
+      const backendWiresProvider = codexBackendWiresProvider(backend);
+      yield* materializeCodexShadowHome(homeLayout, {
+        privateConfigToml: backendWiresProvider,
+      }).pipe(
         Effect.mapError(
           (cause) =>
             new ProviderDriverError({
@@ -155,11 +165,31 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             }),
         ),
       );
+      // The backend's `model_providers` entry lands in the shadow home's
+      // config.toml (selection via top-level `model_provider`). Direct-mode
+      // instances and non-OpenAI-wire backends leave every config file alone.
+      yield* writeCodexBackendShadowConfig(homeLayout, backend, processEnv).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: cause.message,
+              cause,
+            }),
+        ),
+      );
+      // Connection models ride the custom-model path: appendCustomCodexModels
+      // appends them to the probed `model/list` results as isCustom entries.
+      const backendModels = backendWiresProvider ? (backend?.models ?? []) : [];
       const effectiveConfig = {
         ...config,
         enabled,
         binaryPath: expandHomePath(config.binaryPath),
         homePath: homeLayout.effectiveHomePath ?? "",
+        ...(backendModels.length > 0
+          ? { customModels: [...config.customModels, ...backendModels] }
+          : {}),
       } satisfies CodexSettings;
       const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
         resolveProviderMaintenanceCapabilitiesEffect(

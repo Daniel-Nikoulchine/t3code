@@ -46,6 +46,18 @@ function createSettingsRouter(initialEntry = "/settings/general") {
         : {}),
     }),
   });
+  const harness = createRoute({
+    getParentRoute: () => settings,
+    path: "harness",
+    validateSearch: (raw: Record<string, unknown>) => ({
+      ...(typeof raw.environmentId === "string" && raw.environmentId.trim()
+        ? { environmentId: EnvironmentId.make(raw.environmentId) }
+        : {}),
+      ...(typeof raw.instanceId === "string" && raw.instanceId.trim()
+        ? { instanceId: ProviderInstanceId.make(raw.instanceId) }
+        : {}),
+    }),
+  });
   const legacyProject = createRoute({
     getParentRoute: () => root,
     path: "projects/$projectKey",
@@ -59,7 +71,7 @@ function createSettingsRouter(initialEntry = "/settings/general") {
   });
   return createRouter({
     routeTree: root.addChildren([
-      settings.addChildren([general, projects, integrations, sourceControl, providers]),
+      settings.addChildren([general, projects, integrations, sourceControl, providers, harness]),
       legacyProject,
     ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
@@ -156,6 +168,24 @@ describe("settings scope navigation", () => {
     const router = createSettingsRouter();
     await router.navigate({ to: "/settings/general", search: checkoutSearch });
     await router.navigate({
+      to: "/settings/harness",
+      search: {
+        environmentId: EnvironmentId.make("provider-server"),
+        instanceId: ProviderInstanceId.make("codex-work"),
+      },
+    });
+    expect(router.state.location.search).toEqual({
+      machine: "provider-server",
+      environmentId: "provider-server",
+      instanceId: "codex-work",
+    });
+    await router.navigate({ to: "/settings/general", hash: "" });
+    expect(router.state.location.search).toEqual({ machine: "provider-server" });
+  });
+
+  it("honors an explicit environment on the Providers tab", async () => {
+    const router = createSettingsRouter();
+    await router.navigate({
       to: "/settings/providers",
       search: {
         environmentId: EnvironmentId.make("provider-server"),
@@ -173,7 +203,7 @@ describe("settings scope navigation", () => {
 
   it("preserves the environment from an initially loaded legacy provider URL", async () => {
     const router = createSettingsRouter(
-      "/settings/providers?environmentId=provider-server&instanceId=codex-work",
+      "/settings/harness?environmentId=provider-server&instanceId=codex-work",
     );
     await router.load();
     await router.navigate({ to: "/settings/general" });

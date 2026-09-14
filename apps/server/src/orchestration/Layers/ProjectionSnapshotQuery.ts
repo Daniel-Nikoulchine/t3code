@@ -4,6 +4,7 @@ import {
   ChatAttachment,
   OrchestrationMessageContext,
   CheckpointRef,
+  FallbackCombo,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
@@ -128,6 +129,7 @@ const ProjectionThreadPullRequestDbRowSchema = ProjectionThreadPullRequest.mapFi
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    combo: Schema.NullOr(Schema.fromJsonString(FallbackCombo)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
@@ -560,6 +562,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           model_selection_json AS "modelSelection",
+          fallback_combo_json AS "combo",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
           branch,
@@ -600,6 +603,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           model_selection_json AS "modelSelection",
+          fallback_combo_json AS "combo",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
           branch,
@@ -642,6 +646,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           model_selection_json AS "modelSelection",
+          fallback_combo_json AS "combo",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
           branch,
@@ -1202,6 +1207,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           project_id AS "projectId",
           title,
           model_selection_json AS "modelSelection",
+          fallback_combo_json AS "combo",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
           branch,
@@ -2237,6 +2243,8 @@ pending_approval_requests AS (
                 projectId: row.projectId,
                 title: row.title,
                 modelSelection: row.modelSelection,
+                // NULL/legacy rows expose "no combo" as undefined (same as never-set).
+                ...(row.combo != null ? { combo: row.combo } : {}),
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
                 branch: row.branch,
@@ -2481,6 +2489,8 @@ pending_approval_requests AS (
                   projectId: row.projectId,
                   title: row.title,
                   modelSelection: row.modelSelection,
+                  // NULL/legacy rows expose "no combo" as undefined (same as never-set).
+                  ...(row.combo != null ? { combo: row.combo } : {}),
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
                   branch: row.branch,
@@ -2636,6 +2646,8 @@ pending_approval_requests AS (
                         projectId: row.projectId,
                         title: row.title,
                         modelSelection: row.modelSelection,
+                        // NULL/legacy rows expose "no combo" as undefined (same as never-set).
+                        ...(row.combo != null ? { combo: row.combo } : {}),
                         runtimeMode: row.runtimeMode,
                         interactionMode: row.interactionMode,
                         branch: row.branch,
@@ -2798,6 +2810,8 @@ pending_approval_requests AS (
                   projectId: row.projectId,
                   title: row.title,
                   modelSelection: row.modelSelection,
+                  // NULL/legacy rows expose "no combo" as undefined (same as never-set).
+                  ...(row.combo != null ? { combo: row.combo } : {}),
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
                   branch: row.branch,
@@ -3150,6 +3164,8 @@ pending_approval_requests AS (
         projectId: threadRow.value.projectId,
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
+        // NULL/legacy rows expose "no combo" as undefined (same as never-set).
+        ...(threadRow.value.combo != null ? { combo: threadRow.value.combo } : {}),
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
@@ -3449,6 +3465,8 @@ pending_approval_requests AS (
         projectId: threadRow.value.projectId,
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
+        // NULL/legacy rows expose "no combo" as undefined (same as never-set).
+        ...(threadRow.value.combo != null ? { combo: threadRow.value.combo } : {}),
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,

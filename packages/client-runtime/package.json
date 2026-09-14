@@ -7,6 +7,10 @@
       "types": "./src/load-balancing.ts",
       "default": "./src/load-balancing.ts"
     },
+    "./model-catalog": {
+      "types": "./src/modelCatalog.ts",
+      "default": "./src/modelCatalog.ts"
+    },
     "./project-favicon-cache": {
       "types": "./src/projectFaviconCache.ts",
       "default": "./src/projectFaviconCache.ts"
@@ -115,6 +119,10 @@
       "types": "./src/state/entities.ts",
       "default": "./src/state/entities.ts"
     },
+    "./state/fallback-combo": {
+      "types": "./src/state/fallbackCombo.ts",
+      "default": "./src/state/fallbackCombo.ts"
+    },
     "./state/filesystem": {
       "types": "./src/state/filesystem.ts",
       "default": "./src/state/filesystem.ts"
@@ -154,6 +162,14 @@
     "./state/provider-instance-display": {
       "types": "./src/state/providerInstanceDisplay.ts",
       "default": "./src/state/providerInstanceDisplay.ts"
+    },
+    "./state/model-backend-test": {
+      "types": "./src/state/modelBackendTest.ts",
+      "default": "./src/state/modelBackendTest.ts"
+    },
+    "./state/model-provider-presets": {
+      "types": "./src/state/modelProviderPresets.ts",
+      "default": "./src/state/modelProviderPresets.ts"
     },
     "./state/pull-requests": {
       "types": "./src/state/pullRequests.ts",

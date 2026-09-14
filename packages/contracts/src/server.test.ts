@@ -3,10 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
+  isProviderProxied,
   resolveEnvironmentMachineKind,
   ServerConfig,
   ServerProvider,
   ServerProviders,
+  ServerTestModelBackendRequest,
+  ServerTestModelBackendResult,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import { ServerSettings } from "./settings.ts";
@@ -95,6 +98,46 @@ describe("ServerProvider", () => {
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
   });
 
+  it("decodes provider snapshot backend metadata", () => {
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      backend: {
+        kind: "openai-compatible",
+        displayName: "OmniRoute",
+        viaProxy: true,
+        capabilitiesDegraded: true,
+      },
+    });
+
+    expect(parsed.backend?.kind).toBe("openai-compatible");
+    expect(parsed.backend?.displayName).toBe("OmniRoute");
+    expect(parsed.backend?.viaProxy).toBe(true);
+    expect(parsed.backend?.capabilitiesDegraded).toBe(true);
+  });
+
+  it("decodes legacy provider snapshot without backend as native", () => {
+    const parsed = decodeServerProvider(baseProviderSnapshot);
+
+    expect(parsed.backend).toBeUndefined();
+    expect(isProviderProxied(parsed)).toBe(false);
+  });
+
+  it("treats absent and explicit-native backends as not proxied", () => {
+    const legacy = decodeServerProvider(baseProviderSnapshot);
+    const native = decodeServerProvider({
+      ...baseProviderSnapshot,
+      backend: { kind: "native", viaProxy: false },
+    });
+    const proxied = decodeServerProvider({
+      ...baseProviderSnapshot,
+      backend: { kind: "openai-compatible", viaProxy: true },
+    });
+
+    expect(isProviderProxied(legacy)).toBe(false);
+    expect(isProviderProxied(native)).toBe(false);
+    expect(isProviderProxied(proxied)).toBe(true);
+  });
+
   it("decodes optional legacy model metadata", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",
@@ -174,6 +217,74 @@ describe("server config forward compatibility", () => {
     expect(parsed.usageLimits?.windows).toEqual([
       { id: "primary", kind: "session", label: "Session", usedPercent: 12 },
     ]);
+  });
+
+  it("leaves backendLastVerifiedAt absent for never-verified providers", () => {
+    const parsed = decodeServerProvider(baseProviderSnapshot);
+
+    expect(parsed.backendLastVerifiedAt).toBeUndefined();
+  });
+
+  it("carries backendLastVerifiedAt for verified providers", () => {
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      backendLastVerifiedAt: "2026-09-13T00:00:00.000Z",
+    });
+
+    expect(parsed.backendLastVerifiedAt).toBe("2026-09-13T00:00:00.000Z");
+  });
+});
+
+describe("ServerTestModelBackend", () => {
+  const decodeRequest = Schema.decodeUnknownSync(ServerTestModelBackendRequest);
+  const decodeResult = Schema.decodeUnknownSync(ServerTestModelBackendResult);
+
+  it("decodes a native backend probe request", () => {
+    expect(decodeRequest({ backend: { kind: "native" } })).toEqual({
+      backend: { kind: "native" },
+    });
+  });
+
+  it("decodes an openai-compatible backend probe request", () => {
+    expect(
+      decodeRequest({
+        backend: {
+          kind: "openai-compatible",
+          baseUrl: "https://gateway.example/v1",
+          apiKeyEnv: "GATEWAY_API_KEY",
+        },
+      }),
+    ).toEqual({
+      backend: {
+        kind: "openai-compatible",
+        baseUrl: "https://gateway.example/v1",
+        apiKeyEnv: "GATEWAY_API_KEY",
+      },
+    });
+  });
+
+  it("rejects an openai-compatible backend without baseUrl", () => {
+    expect(() => decodeRequest({ backend: { kind: "openai-compatible" } })).toThrow();
+  });
+
+  it("decodes a successful probe result with model count", () => {
+    expect(
+      decodeResult({ ok: true, modelCount: 3, checkedAt: "2026-09-13T00:00:00.000Z" }),
+    ).toEqual({ ok: true, modelCount: 3, checkedAt: "2026-09-13T00:00:00.000Z" });
+  });
+
+  it("decodes a failed probe result with a short error", () => {
+    expect(
+      decodeResult({
+        ok: false,
+        error: "request failed with status 500",
+        checkedAt: "2026-09-13T00:00:00.000Z",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "request failed with status 500",
+      checkedAt: "2026-09-13T00:00:00.000Z",
+    });
   });
 });
 

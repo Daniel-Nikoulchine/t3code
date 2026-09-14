@@ -63,6 +63,7 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
+  MODEL_CREDENTIAL_VALUE_REDACTED,
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
@@ -105,6 +106,7 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import { testModelBackendResult } from "./provider/ModelBackendProbe.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
@@ -2836,6 +2838,30 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.deviceTestHost, deviceService.testHost(input), {
             "rpc.aggregate": "device",
           }),
+        [WS_METHODS.serverTestModelBackend]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverTestModelBackend,
+            Effect.gen(function* () {
+              // Resolve a credential reference server-side so connections
+              // with stored keys are probeable without the value reaching
+              // the client. The sentinel can never leak: materialized
+              // settings hold real values, and an empty/missing entry just
+              // probes keyless.
+              const backend = yield* input.apiKeyCredentialId === undefined
+                ? Effect.succeed(input.backend)
+                : Effect.gen(function* () {
+                    const settings = yield* serverSettings.getSettings;
+                    const value = settings.modelCredentials[input.apiKeyCredentialId]?.value;
+                    return value === undefined ||
+                      value.length === 0 ||
+                      value === MODEL_CREDENTIAL_VALUE_REDACTED
+                      ? input.backend
+                      : { ...input.backend, apiKey: value };
+                  });
+              return yield* testModelBackendResult(backend);
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.deviceList]: (_input) =>
           observeRpcEffect(WS_METHODS.deviceList, deviceService.list, {
             "rpc.aggregate": "device",

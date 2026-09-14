@@ -4353,6 +4353,133 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
     }),
   );
 
+  it.effect("projects a thread fallback combo from create through meta.update", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const projectId = ProjectId.make("project-combo");
+      const threadId = ThreadId.make("thread-combo");
+      const combo = {
+        targets: [
+          { instanceId: ProviderInstanceId.make("opencode_personal"), model: "claude-sonnet-4-5" },
+          { instanceId: ProviderInstanceId.make("opencode_proxy"), model: "gpt-5" },
+        ],
+        strategy: "priority" as const,
+        fallbackOn: ["rate-limit", "provider-error"] as const,
+      };
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-combo-project-create"),
+        projectId,
+        title: "Combo Project",
+        workspaceRoot: "/tmp/project-combo",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      });
+
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-combo-thread-create"),
+        threadId,
+        projectId,
+        title: "Combo thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("opencode_personal"),
+          model: "claude-sonnet-4-5",
+        },
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        combo,
+        createdAt,
+      });
+
+      const created = Option.getOrThrow(yield* snapshotQuery.getThreadShellById(threadId));
+      assert.strictEqual(created.combo?.strategy, "priority");
+      assert.strictEqual(created.combo?.targets.length, 2);
+      assert.strictEqual(String(created.combo?.targets[1]?.instanceId), "opencode_proxy");
+
+      const updatedCombo = {
+        targets: [{ instanceId: ProviderInstanceId.make("opencode_proxy"), model: "gpt-5" }],
+        strategy: "lkgp" as const,
+        fallbackOn: ["rate-limit", "provider-error"] as const,
+      };
+      yield* engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-combo-thread-update"),
+        threadId,
+        combo: updatedCombo,
+      });
+
+      const updated = Option.getOrThrow(yield* snapshotQuery.getThreadShellById(threadId));
+      assert.strictEqual(updated.combo?.strategy, "lkgp");
+      assert.strictEqual(updated.combo?.targets.length, 1);
+      const detail = Option.getOrThrow(yield* snapshotQuery.getThreadDetailById(threadId));
+      assert.strictEqual(detail.combo?.strategy, "lkgp");
+
+      yield* engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-combo-thread-clear"),
+        threadId,
+        combo: null,
+      });
+
+      const cleared = Option.getOrThrow(yield* snapshotQuery.getThreadShellById(threadId));
+      assert.strictEqual(cleared.combo, undefined);
+      const clearedDetail = Option.getOrThrow(yield* snapshotQuery.getThreadDetailById(threadId));
+      assert.strictEqual(clearedDetail.combo, undefined);
+    }),
+  );
+
+  it.effect("projects legacy threads without a combo as undefined", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const projectId = ProjectId.make("project-combo-legacy");
+      const threadId = ThreadId.make("thread-combo-legacy");
+
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-combo-legacy-project-create"),
+        projectId,
+        title: "Legacy Combo Project",
+        workspaceRoot: "/tmp/project-combo-legacy",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      });
+
+      yield* engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-combo-legacy-thread-create"),
+        threadId,
+        projectId,
+        title: "Legacy thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      });
+
+      const shell = Option.getOrThrow(yield* snapshotQuery.getThreadShellById(threadId));
+      assert.strictEqual(shell.combo, undefined);
+    }),
+  );
+
   it.effect("re-creating a deleted thread id starts from an empty projection", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;

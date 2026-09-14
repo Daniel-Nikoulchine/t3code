@@ -20,7 +20,10 @@ import * as EffectAcpClient from "effect-acp/client";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import type * as EffectAcpProtocol from "effect-acp/protocol";
+import type { ModelBackendConfig } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+
+import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
 
 import {
   collectSessionConfigOptionValues,
@@ -75,6 +78,32 @@ export interface AcpSpawnInput {
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
   readonly extendEnv?: boolean;
+  /**
+   * Optional model backend (routing/auth target) for the spawned harness.
+   * Dormant safety net, not the driving mechanism: drivers merge the backend
+   * env upstream (Task 6), so this path only serves explicit callers that pass
+   * a backend directly. Absent means native.
+   */
+  readonly backend?: ModelBackendConfig | undefined;
+}
+
+/**
+ * Computes the exact environment the central ACP spawn site passes to the
+ * harness subprocess: `spawn.env` plus the `resolveModelBackendEnvironment`
+ * overlay, which wins on `OPENAI_*`/`ANTHROPIC_*` keys. Without a backend the
+ * input env is returned untouched (same reference, possibly `undefined`).
+ * `baseEnv` only resolves the `apiKeyEnv` name to a value and defaults to
+ * `process.env` like the OpenCode driver merge.
+ */
+export function resolveAcpSpawnEnvironment(
+  spawn: AcpSpawnInput,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv | undefined {
+  const backendOverlay = resolveModelBackendEnvironment(spawn.backend, baseEnv);
+  if (Object.keys(backendOverlay).length === 0) {
+    return spawn.env;
+  }
+  return { ...spawn.env, ...backendOverlay };
 }
 
 export interface AcpSessionRuntimeOptions {
@@ -425,15 +454,16 @@ export const make = (
         ),
       );
 
+    const spawnEnv = resolveAcpSpawnEnvironment(options.spawn);
     const spawnCommand = yield* resolveSpawnCommand(options.spawn.command, options.spawn.args, {
-      ...(options.spawn.env ? { env: options.spawn.env } : {}),
+      ...(spawnEnv ? { env: spawnEnv } : {}),
       extendEnv: options.spawn.extendEnv ?? true,
     });
     const child = yield* spawner
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-          ...(options.spawn.env ? { env: options.spawn.env } : {}),
+          ...(spawnEnv ? { env: spawnEnv } : {}),
           extendEnv: options.spawn.extendEnv ?? true,
           shell: spawnCommand.shell,
         }),

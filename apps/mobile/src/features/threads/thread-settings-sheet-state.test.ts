@@ -7,6 +7,7 @@ import {
   canCommitPendingModel,
   modelMatchesCatalogQuery,
   pendingModelAfterPress,
+  resolveComboTargetDisplay,
 } from "./thread-settings-sheet-state";
 
 function modelOption(
@@ -35,9 +36,10 @@ describe("thread settings sheet state", () => {
   it("matches visible model and provider terms", () => {
     const model = modelOption("gpt-next");
 
-    expect(modelMatchesCatalogQuery({ model, providerLabel: "Codex", query: "NEXT" })).toBe(true);
-    expect(modelMatchesCatalogQuery({ model, providerLabel: "Codex", query: "codex" })).toBe(true);
-    expect(modelMatchesCatalogQuery({ model, providerLabel: "Codex", query: "claude" })).toBe(
+    expect(modelMatchesCatalogQuery({ model, groupLabel: "GPT Next", query: "NEXT" })).toBe(true);
+    // The pairing's provider label is searchable even though groups are models.
+    expect(modelMatchesCatalogQuery({ model, groupLabel: "GPT Next", query: "codex" })).toBe(true);
+    expect(modelMatchesCatalogQuery({ model, groupLabel: "GPT Next", query: "claude" })).toBe(
       false,
     );
   });
@@ -46,7 +48,7 @@ describe("thread settings sheet state", () => {
     expect(
       modelMatchesCatalogQuery({
         model: modelOption("gpt-next"),
-        providerLabel: "Codex",
+        groupLabel: "GPT Next",
         query: "   ",
       }),
     ).toBe(true);
@@ -59,12 +61,12 @@ describe("thread settings sheet state", () => {
       subtitle: "OpenCode Zen",
     };
 
-    expect(modelMatchesCatalogQuery({ model, providerLabel: "OpenCode", query: " ZEN " })).toBe(
+    expect(modelMatchesCatalogQuery({ model, groupLabel: "Claude Fable 5", query: " ZEN " })).toBe(
       true,
     );
-    expect(modelMatchesCatalogQuery({ model, providerLabel: "OpenCode", query: "copilot" })).toBe(
-      false,
-    );
+    expect(
+      modelMatchesCatalogQuery({ model, groupLabel: "Claude Fable 5", query: "copilot" }),
+    ).toBe(false);
   });
 
   it("clears staging when the applied model is pressed", () => {
@@ -103,7 +105,7 @@ describe("thread settings sheet state", () => {
 
   it("cannot save a staged model after sign-out removes it from the catalog", () => {
     const pending = modelOption("gemini-native");
-    const group = { providerKey: "codex", providerLabel: "Codex", models: [pending] };
+    const group = { key: "gemini-native", label: "Gemini Native", models: [pending] };
 
     expect(canCommitPendingModel(pending, [group])).toBe(true);
     expect(canCommitPendingModel(pending, [])).toBe(false);
@@ -115,5 +117,42 @@ describe("thread settings sheet state", () => {
         },
       ]),
     ).toBe(false);
+  });
+
+  it("labels combo targets from the rendered catalog", () => {
+    const groups = [
+      {
+        key: "gpt-5.4",
+        label: "GPT-5.4",
+        models: [
+          {
+            ...modelOption("gpt-5.4"),
+            key: "opencode_proxy:gpt-5.4",
+            providerKey: "opencode_proxy",
+            providerLabel: "OpenCode Proxy",
+            selection: {
+              instanceId: ProviderInstanceId.make("opencode_proxy"),
+              model: "gpt-5.4",
+            },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      resolveComboTargetDisplay(
+        { instanceId: ProviderInstanceId.make("opencode_proxy"), model: "gpt-5.4" },
+        groups,
+      ),
+    ).toEqual({ title: "gpt-5.4", subtitle: "OpenCode Proxy" });
+  });
+
+  it("falls back to raw slugs for combo targets missing from the catalog", () => {
+    expect(
+      resolveComboTargetDisplay(
+        { instanceId: ProviderInstanceId.make("opencode_proxy"), model: "gpt-unknown" },
+        [],
+      ),
+    ).toEqual({ title: "gpt-unknown", subtitle: "opencode_proxy" });
   });
 });

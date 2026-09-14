@@ -46,6 +46,14 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Checkpoint baseline | The workspace state captured before the work being compared.                                                 |
 | Turn diff           | The workspace changes attributed to one turn.                                                                |
 
+## Models
+
+| Term                     | Meaning                                                                                                                       |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| Model backend connection | A named OpenAI-/Anthropic-compatible endpoint that provider instances attach to. Not a client's connection to an environment. |
+| Model credential         | A vendor API key stored server-side and redacted in clients. OAuth and subscription logins stay bound to their provider CLI.  |
+| Model routing            | Per-model rules that send requests through the server's built-in proxy to a connection or vendor API, translating protocols.  |
+
 ## Pull requests
 
 | Term                 | Meaning                                                                                                                                                                                  |

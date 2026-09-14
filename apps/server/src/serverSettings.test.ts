@@ -1,7 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  MODEL_CREDENTIAL_VALUE_REDACTED,
+  ModelCredentialId,
   ModelSelection,
+  ModelVendor,
   ProjectId,
   ProjectScript,
   ProviderDriverKind,
@@ -31,9 +34,28 @@ import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.t
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
+// Mirrors the server-side secret naming (`model-credential-<base64url(id)>`)
+// so the tests can assert store contents directly.
+const modelCredentialSecretName = (credentialId: string): string =>
+  `model-credential-${Buffer.from(credentialId, "utf8").toString("base64url")}`;
+
+const readStoredSecret = (
+  secretStore: ServerSecretStore.ServerSecretStore["Service"],
+  name: string,
+) =>
+  Effect.map(
+    secretStore.get(name),
+    Option.match({
+      onNone: () => undefined,
+      onSome: (value) => new TextDecoder().decode(value),
+    }),
+  );
+
 const makeServerSettingsLayer = () =>
   ServerSettingsModule.layer.pipe(
-    Layer.provide(ServerSecretStore.layer),
+    // Merged (not just provided) so tests can observe the same store
+    // instance the settings service writes through.
+    Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
     Layer.provideMerge(
       Layer.fresh(
@@ -1040,13 +1062,31 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           cursor: {
             enabled: false,
           },
+          devin: {
+            enabled: false,
+          },
           grok: {
+            enabled: false,
+          },
+          kilo: {
+            enabled: false,
+          },
+          copilot: {
+            enabled: false,
+          },
+          droid: {
+            enabled: false,
+          },
+          omp: {
             enabled: false,
           },
           opencode: {
             enabled: false,
             serverUrl: "http://127.0.0.1:4096",
             serverPassword: "secret-password",
+          },
+          pi: {
+            enabled: false,
           },
         },
         backgroundActivity: {
@@ -1280,6 +1320,215 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.match(environment.CODEX_HOME ?? "", /[\\/][.]codex-terminal$/);
       assert.notInclude(persisted, "sk-terminal-secret");
       assert.include(persisted, '"valueRedacted": true');
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("stores model credential values outside settings.json", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const credentialId = ModelCredentialId.make("glm-main");
+
+      const next = yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [credentialId]: {
+            displayName: "GLM",
+            vendor: ModelVendor.make("zhipu"),
+            value: "sk-glm-secret-1234",
+          },
+        },
+      });
+      assert.equal(next.modelCredentials[credentialId]?.value, "sk-glm-secret-1234");
+      assert.equal(next.modelCredentials[credentialId]?.lastFour, "1234");
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(raw, "sk-glm-secret-1234");
+      assert.include(raw, MODEL_CREDENTIAL_VALUE_REDACTED);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const persisted = JSON.parse(raw).modelCredentials[credentialId];
+      assert.equal(persisted.value, MODEL_CREDENTIAL_VALUE_REDACTED);
+      assert.equal(persisted.lastFour, "1234");
+      assert.equal(
+        yield* readStoredSecret(secretStore, modelCredentialSecretName(credentialId)),
+        "sk-glm-secret-1234",
+      );
+
+      const redacted = ServerSettingsModule.redactServerSettingsForClient(next);
+      assert.equal(redacted.modelCredentials[credentialId]?.value, MODEL_CREDENTIAL_VALUE_REDACTED);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("redacts only credentials that actually hold a value", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const setCredentialId = ModelCredentialId.make("glm-main");
+      const emptyCredentialId = ModelCredentialId.make("glm-empty");
+
+      yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [setCredentialId]: {
+            displayName: "GLM",
+            vendor: ModelVendor.make("zhipu"),
+            value: "sk-glm-secret-1234",
+          },
+          [emptyCredentialId]: {
+            displayName: "GLM spare",
+            vendor: ModelVendor.make("zhipu"),
+            value: "",
+          },
+        },
+      });
+
+      const redacted = ServerSettingsModule.redactServerSettingsForClient(
+        yield* serverSettings.getSettings,
+      );
+      assert.equal(
+        redacted.modelCredentials[setCredentialId]?.value,
+        MODEL_CREDENTIAL_VALUE_REDACTED,
+      );
+      assert.equal(redacted.modelCredentials[emptyCredentialId]?.value, "");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("rehydrates model credential values from the secret store", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const credentialId = ModelCredentialId.make("glm-main");
+      yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [credentialId]: {
+            displayName: "GLM",
+            vendor: ModelVendor.make("zhipu"),
+            value: "sk-glm-secret-1234",
+          },
+        },
+      });
+
+      // A fresh service over the same home reads the persisted sentinel and
+      // must materialize the real value from the secret store.
+      const reloaded = yield* Effect.gen(function* () {
+        const fresh = yield* ServerSettingsModule.ServerSettingsService;
+        return yield* fresh.getSettings;
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(ServerSettingsModule.layer).pipe(Layer.provideMerge(ServerSecretStore.layer)),
+        ),
+      );
+      assert.equal(reloaded.modelCredentials[credentialId]?.value, "sk-glm-secret-1234");
+      assert.equal(reloaded.modelCredentials[credentialId]?.lastFour, "1234");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("keeps the stored secret when a client sends the redaction sentinel back", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const credentialId = ModelCredentialId.make("glm-main");
+      yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [credentialId]: {
+            displayName: "GLM",
+            vendor: ModelVendor.make("zhipu"),
+            value: "sk-glm-secret-1234",
+          },
+        },
+      });
+
+      const next = yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [credentialId]: {
+            displayName: "GLM renamed",
+            vendor: ModelVendor.make("zhipu"),
+            value: MODEL_CREDENTIAL_VALUE_REDACTED,
+            lastFour: "1234",
+          },
+        },
+      });
+      assert.equal(next.modelCredentials[credentialId]?.value, "sk-glm-secret-1234");
+      assert.equal(next.modelCredentials[credentialId]?.lastFour, "1234");
+      assert.equal(
+        yield* readStoredSecret(secretStore, modelCredentialSecretName(credentialId)),
+        "sk-glm-secret-1234",
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("clears a model credential value and removes its secret", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const credentialId = ModelCredentialId.make("glm-main");
+      yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [credentialId]: {
+            displayName: "GLM",
+            vendor: ModelVendor.make("zhipu"),
+            value: "sk-glm-secret-1234",
+          },
+        },
+      });
+      assert.isDefined(
+        yield* readStoredSecret(secretStore, modelCredentialSecretName(credentialId)),
+      );
+
+      const next = yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [credentialId]: {
+            displayName: "GLM",
+            vendor: ModelVendor.make("zhipu"),
+            value: "",
+          },
+        },
+      });
+      assert.equal(next.modelCredentials[credentialId]?.value, "");
+      assert.isUndefined(
+        yield* readStoredSecret(secretStore, modelCredentialSecretName(credentialId)),
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("removes the secret of a deleted model credential", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const keptId = ModelCredentialId.make("glm-kept");
+      const removedId = ModelCredentialId.make("glm-removed");
+      yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [keptId]: {
+            displayName: "GLM kept",
+            vendor: ModelVendor.make("zhipu"),
+            value: "sk-kept-secret-9999",
+          },
+          [removedId]: {
+            displayName: "GLM removed",
+            vendor: ModelVendor.make("zhipu"),
+            value: "sk-removed-secret-1111",
+          },
+        },
+      });
+
+      // Whole-map replacement drops `removed`; its secret must go with it
+      // while the kept credential (sent back as the sentinel) survives.
+      yield* serverSettings.updateSettings({
+        modelCredentials: {
+          [keptId]: {
+            displayName: "GLM kept",
+            vendor: ModelVendor.make("zhipu"),
+            value: MODEL_CREDENTIAL_VALUE_REDACTED,
+            lastFour: "9999",
+          },
+        },
+      });
+      assert.equal(
+        yield* readStoredSecret(secretStore, modelCredentialSecretName(keptId)),
+        "sk-kept-secret-9999",
+      );
+      assert.isUndefined(
+        yield* readStoredSecret(secretStore, modelCredentialSecretName(removedId)),
+      );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 

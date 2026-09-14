@@ -11,6 +11,8 @@
  */
 import {
   EventId,
+  type FallbackCombo,
+  type FallbackComboTarget,
   MessageId,
   ModelSelection,
   NonNegativeInt,
@@ -19,6 +21,7 @@ import {
   ProviderRespondToUserInputInput,
   RuntimeRequestId,
   ProviderSendTurnInput,
+  type ServerProviderUsageLimits,
   type ChatImageAttachment,
   type SnapShotAccessibility,
   type SnapShotAccessibilityNode,
@@ -40,9 +43,11 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -70,6 +75,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import {
+  isRetryableProviderError,
   ProviderAdapterRequestError,
   type ProviderAdapterError,
   ProviderValidationError,
@@ -79,6 +85,7 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
+import * as BackendLastVerified from "../backendLastVerified.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
@@ -256,6 +263,16 @@ export interface ProviderServiceLiveOptions {
    * test see whether a credential was requested at all.
    */
   readonly issueMcpCredential?: typeof McpSessionRegistry.issueActiveMcpCredential;
+  /**
+   * Reads the latest known subscription quota for a provider instance, used
+   * only to order `headroom` fallback combos (most remaining quota first).
+   * The service owns no snapshot subscription, so production leaves this
+   * undefined until something wires it: every target then ranks as unknown
+   * and `headroom` degrades to exact priority order (never estimated).
+   */
+  readonly resolveComboUsageLimits?: (
+    instanceId: ProviderInstanceId,
+  ) => ServerProviderUsageLimits | undefined;
 }
 
 interface TurnAnalyticsMetadata {
@@ -464,6 +481,182 @@ const correlateRuntimeEventWithInstance = (
   return { ...event, providerInstanceId: source.instanceId };
 };
 
+/**
+ * Turn-fallback combo execution (Task 10b).
+ *
+ * The loop lives strictly at the `adapter.sendTurn` call level: each combo
+ * target is attempted at most once, and only a synchronous Effect failure of
+ * the call itself can advance to the next target. A turn that already started
+ * on one target (a mid-turn `turn.completed` failure, running tool calls,
+ * approvals) is never torn down and retried elsewhere — retrying there would
+ * split checkpoints and diffs across instances.
+ *
+ * Sessions are not managed here: every fallback target needs a live session
+ * on its instance (a missing session surfaces as a terminal
+ * SessionNotFound error, by design — it is a routing/config problem, not a
+ * transient provider failure).
+ */
+interface ComboLastKnownGood {
+  readonly instanceId: ProviderInstanceId;
+  readonly model: string;
+}
+
+/**
+ * FIFO cap for the per-thread last-known-good table: a plain `Map` never
+ * evicts on its own, so inserts beyond this size drop the oldest entry
+ * (insertion order — no LRU reorder on hit) to bound process-local memory.
+ */
+export const COMBO_LKG_CAP = 500;
+
+/**
+ * Capped insert for the last-known-good table. Re-recording an existing
+ * thread keeps its position (`Map.set` does not reorder hits); only a new
+ * key at capacity evicts the oldest entry first.
+ */
+export const recordComboLastKnownGood = (
+  table: Map<ThreadId, ComboLastKnownGood>,
+  threadId: ThreadId,
+  entry: ComboLastKnownGood,
+): void => {
+  if (!table.has(threadId) && table.size >= COMBO_LKG_CAP) {
+    const oldest = table.keys().next();
+    if (!oldest.done) table.delete(oldest.value);
+  }
+  table.set(threadId, entry);
+};
+
+/**
+ * Remaining quota 0..100 for one target, or null when it cannot be ranked:
+ * no snapshot reader wired, no limits published, an `unavailable` marker, or
+ * an empty window list. Unknown targets are never estimated — callers fall
+ * back to priority order for them. A throwing reader counts as unknown so
+ * quota telemetry can never break a turn.
+ */
+function comboTargetHeadroomScore(
+  target: FallbackComboTarget,
+  resolveUsageLimits:
+    | ((instanceId: ProviderInstanceId) => ServerProviderUsageLimits | undefined)
+    | undefined,
+): number | null {
+  if (!resolveUsageLimits) return null;
+  try {
+    const limits = resolveUsageLimits(target.instanceId);
+    if (
+      !limits ||
+      limits.unavailable !== undefined ||
+      !Array.isArray(limits.windows) ||
+      limits.windows.length === 0
+    ) {
+      return null;
+    }
+    let headroom = 0;
+    for (const window of limits.windows) {
+      headroom = Math.max(headroom, 100 - window.usedPercent);
+    }
+    return headroom;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Order combo targets by strategy. `priority` keeps the configured order.
+ * `headroom` sorts quota-known targets by most remaining quota first (stable:
+ * ties and unknown-quota targets keep their priority position, and an
+ * all-unknown combo degrades to exact priority order). `lkgp` moves the
+ * last-known-good target first when it is still part of the combo, otherwise
+ * keeps priority order.
+ */
+function orderComboTargets(input: {
+  readonly combo: FallbackCombo;
+  readonly lastKnownGood: ComboLastKnownGood | undefined;
+  readonly resolveUsageLimits:
+    | ((instanceId: ProviderInstanceId) => ServerProviderUsageLimits | undefined)
+    | undefined;
+}): ReadonlyArray<FallbackComboTarget> {
+  const targets = input.combo.targets;
+  switch (input.combo.strategy) {
+    case "lkgp": {
+      const sticky = input.lastKnownGood;
+      if (!sticky) return targets;
+      const index = targets.findIndex(
+        (target) => target.instanceId === sticky.instanceId && target.model === sticky.model,
+      );
+      if (index <= 0) return targets;
+      const winner = targets[index];
+      if (!winner) return targets;
+      return [winner, ...targets.slice(0, index), ...targets.slice(index + 1)];
+    }
+    case "headroom": {
+      if (!input.resolveUsageLimits) return targets;
+      const scored = targets.map((target, index) => ({
+        target,
+        index,
+        score: comboTargetHeadroomScore(target, input.resolveUsageLimits),
+      }));
+      if (scored.every((entry) => entry.score === null)) return targets;
+      return scored
+        .slice()
+        .sort((left, right) => (right.score ?? -1) - (left.score ?? -1) || left.index - right.index)
+        .map((entry) => entry.target);
+    }
+    case "priority":
+    default:
+      return targets;
+  }
+}
+
+/**
+ * One-line failure signal for `model.rerouted` reasons. Non-throwing and
+ * truncated; never empty (falls back to "unknown") so the schema's non-empty
+ * `reason` always holds.
+ */
+function comboFailureSignal(error: unknown): string {
+  try {
+    const parts: Array<string> = [];
+    const tag = (error as { readonly _tag?: unknown } | null | undefined)?._tag;
+    if (typeof tag === "string" && tag.trim().length > 0) parts.push(tag.trim());
+    const record = error as Record<string, unknown> | null | undefined;
+    for (const key of ["detail", "issue", "message"] as const) {
+      const value = record?.[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        parts.push(value.trim());
+        break;
+      }
+    }
+    const joined = parts.join(": ").replaceAll(/\s+/g, " ").trim();
+    if (joined.length === 0) return "unknown";
+    return joined.length > 160 ? `${joined.slice(0, 157)}...` : joined;
+  } catch {
+    return "unknown";
+  }
+}
+
+const makeComboReroutedEvent = (input: {
+  readonly eventId: EventId;
+  readonly provider: ProviderDriverKind;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly threadId: ThreadId;
+  readonly createdAt: string;
+  readonly fromModel: string;
+  readonly toModel: string;
+  readonly reason: string;
+  readonly turnId?: TurnId | undefined;
+}): Extract<ProviderRuntimeEvent, { readonly type: "model.rerouted" }> => ({
+  type: "model.rerouted",
+  eventId: input.eventId,
+  provider: input.provider,
+  providerInstanceId: input.providerInstanceId,
+  threadId: input.threadId,
+  createdAt: input.createdAt,
+  ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+  payload: {
+    fromModel: input.fromModel,
+    toModel: input.toModel,
+    reason: input.reason,
+  },
+});
+
 const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
@@ -487,6 +680,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+  // Last-known-good combo target per thread for the `lkgp` strategy.
+  // Best-effort and process-local: entries are forgotten on restart, keyed by
+  // thread because a combo is a per-thread setting, validated against the
+  // current target list on read (a recorded target that left the combo is
+  // ignored), and FIFO-capped at COMBO_LKG_CAP entries. Single-threaded
+  // Effect execution is assumed: concurrent turns of the same thread
+  // last-write-wins. Only successful turns update the entry.
+  const comboLastKnownGood = new Map<ThreadId, ComboLastKnownGood>();
+  // Optional handle on the shared verification tracker. Like the table above
+  // this state is process-local and forgotten on restart (a restart must
+  // read as "unknown", never as "still verified"); unlike it the table
+  // itself lives in `BackendLastVerified` because the registry's snapshot
+  // publish path — not this closure — stamps the marker, and that path
+  // cannot reach closure-local state. No file cache for the same reason:
+  // persisted timestamps would outlive the process that observed them.
+  const backendVerified = yield* Effect.serviceOption(BackendLastVerified.BackendLastVerified);
+  const recordBackendVerified = (instanceId: ProviderInstanceId) =>
+    Option.isSome(backendVerified) ? backendVerified.value.record(instanceId) : Effect.void;
+  let comboRerouteEventCounter = 0;
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
   const timedOutNativeCompactions = new Set<ThreadId>();
   const settleCompaction = (threadId: ThreadId, pending: PendingCompaction, terminal: string) =>
@@ -1719,9 +1931,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       // rather than issuing a new one: sessions that go a long time between
       // browser tool calls used to lose the toolkit outright.
       yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
+      // A decoded combo is the only thing that enables the fallback loop:
+      // `null`/absent keeps the exact legacy single-attempt path below (no
+      // loop, no `model.rerouted` event).
+      const combo = input.combo ?? undefined;
+      const orderedComboTargets =
+        combo !== undefined && combo.targets.length > 0
+          ? orderComboTargets({
+              combo,
+              lastKnownGood: comboLastKnownGood.get(input.threadId),
+              resolveUsageLimits: options?.resolveComboUsageLimits,
+            })
+          : undefined;
       const analyticsModelSelection =
-        input.modelSelection?.instanceId === routed.instanceId ? input.modelSelection : undefined;
-      const turn = yield* Effect.acquireUseRelease(
+        orderedComboTargets !== undefined && orderedComboTargets.length > 0
+          ? orderedComboTargets[0]
+          : input.modelSelection?.instanceId === routed.instanceId
+            ? input.modelSelection
+            : undefined;
+      const turnOutcome = yield* Effect.acquireUseRelease(
         beginTurnAnalytics({
           providerInstanceId: routed.instanceId,
           provider: routed.adapter.provider,
@@ -1732,14 +1960,124 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
         (turnMetadata) =>
           Effect.gen(function* () {
-            const turn = yield* routed.adapter.sendTurn(input);
-            yield* associateTurnAnalytics({
-              providerInstanceId: routed.instanceId,
-              threadId: input.threadId,
-              turnId: String(turn.turnId),
-              metadata: turnMetadata,
-            });
-            return turn;
+            if (
+              combo === undefined ||
+              orderedComboTargets === undefined ||
+              orderedComboTargets.length === 0
+            ) {
+              const turn = yield* routed.adapter.sendTurn(input);
+              // Proof of an executed turn on this instance — the only event
+              // that may mark its backend verified (not intent, not a probe).
+              yield* recordBackendVerified(routed.instanceId);
+              yield* associateTurnAnalytics({
+                providerInstanceId: routed.instanceId,
+                threadId: input.threadId,
+                turnId: String(turn.turnId),
+                metadata: turnMetadata,
+              });
+              return {
+                turn,
+                adapter: routed.adapter,
+                instanceId: routed.instanceId,
+                target: input.modelSelection,
+              };
+            }
+            // Combo fallback: at most one `sendTurn` attempt per target, in
+            // strategy order. Only a retryable synchronous failure advances to
+            // the next target and records a `model.rerouted` hop; anything
+            // terminal (validation/auth/session/user) — and any failure on the
+            // last target — propagates unchanged via its original cause. An
+            // unresolvable target instance id fails fast: it is a
+            // configuration error, never a transient provider failure. Hops are
+            // collected during the loop and published only afterwards: on
+            // success stamped with the executed turn's id (so ingestion writes
+            // a non-null activity turnId and the timeline — which joins notices
+            // on `notice.turnId === row.message.turnId` — renders them), on
+            // total failure without one (analytics/metrics-only; the timeline
+            // drops turnId-less notices via its existing filter, no
+            // timeline change needed).
+            const reroutedEvents: Array<
+              Extract<ProviderRuntimeEvent, { readonly type: "model.rerouted" }>
+            > = [];
+            for (let index = 0; index < orderedComboTargets.length; index += 1) {
+              const target = orderedComboTargets[index];
+              if (!target) continue;
+              const adapter =
+                target.instanceId === routed.instanceId
+                  ? routed.adapter
+                  : yield* registry.getByInstance(target.instanceId);
+              const attempt = yield* Effect.exit(
+                adapter.sendTurn({ ...input, modelSelection: target }),
+              );
+              if (Exit.isSuccess(attempt)) {
+                const turn = attempt.value;
+                recordComboLastKnownGood(comboLastKnownGood, input.threadId, {
+                  instanceId: target.instanceId,
+                  model: target.model,
+                });
+                // Same proof as the single path, for the target that
+                // actually executed — failed-over attempts mark nothing.
+                yield* recordBackendVerified(target.instanceId);
+                yield* associateTurnAnalytics({
+                  providerInstanceId: routed.instanceId,
+                  threadId: input.threadId,
+                  turnId: String(turn.turnId),
+                  metadata: turnMetadata,
+                });
+                for (const rerouted of reroutedEvents) {
+                  const stamped = { ...rerouted, turnId: turn.turnId };
+                  yield* observeModelReroutedForAnalytics(
+                    { instanceId: routed.instanceId },
+                    stamped,
+                  );
+                  yield* publishRuntimeEvent(stamped);
+                  yield* increment(providerRuntimeEventsTotal, {
+                    provider: stamped.provider,
+                    eventType: stamped.type,
+                  });
+                }
+                return { turn, adapter, instanceId: target.instanceId, target };
+              }
+              const failure = Option.getOrUndefined(Cause.findErrorOption(attempt.cause));
+              const trigger =
+                failure !== undefined
+                  ? combo.fallbackOn.find((candidate) =>
+                      isRetryableProviderError(failure, candidate),
+                    )
+                  : undefined;
+              const next = orderedComboTargets[index + 1];
+              if (failure === undefined || trigger === undefined || next === undefined) {
+                for (const rerouted of reroutedEvents) {
+                  yield* publishRuntimeEvent(rerouted);
+                  yield* increment(providerRuntimeEventsTotal, {
+                    provider: rerouted.provider,
+                    eventType: rerouted.type,
+                  });
+                }
+                return yield* Effect.failCause(attempt.cause);
+              }
+              // Duplicate targets may share one model across instances, so
+              // `fromModel == toModel` is possible here — the reroute switches
+              // the instance, not necessarily the model.
+              reroutedEvents.push(
+                makeComboReroutedEvent({
+                  eventId: EventId.make(
+                    `combo-fallback-${String(input.threadId)}-${comboRerouteEventCounter++}`,
+                  ),
+                  provider: adapter.provider,
+                  providerInstanceId: target.instanceId,
+                  threadId: input.threadId,
+                  createdAt: yield* nowIso,
+                  fromModel: target.model,
+                  toModel: next.model,
+                  reason: `${trigger}: ${comboFailureSignal(failure)}`,
+                }),
+              );
+            }
+            // Unreachable: every iteration either returns a turn or fails it,
+            // and the legacy branch above handles the empty-target case. Die
+            // (never an empty cause) so reaching here still names the failure.
+            return yield* Effect.failCause(Cause.die("combo targets exhausted without attempt"));
           }),
         (turnMetadata) =>
           clearPendingTurnAnalytics({
@@ -1748,14 +2086,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             requestId: turnMetadata.requestId,
           }),
       );
+      const turn = turnOutcome.turn;
+      const executedAdapter = turnOutcome.adapter;
+      const executedTarget = turnOutcome.target;
+      metricProvider = executedAdapter.provider;
+      if (executedTarget?.model !== undefined) metricModel = executedTarget.model;
       yield* directory.upsert({
         threadId: input.threadId,
-        provider: routed.adapter.provider,
-        providerInstanceId: routed.instanceId,
+        provider: executedAdapter.provider,
+        providerInstanceId: turnOutcome.instanceId,
         status: "running",
         ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
         runtimePayload: {
-          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+          ...(executedTarget !== undefined ? { modelSelection: executedTarget } : {}),
           activeTurnId: turn.turnId,
           // Admission and marker consumption must survive the same restart.
           continueAfterServerUpdate: null,
@@ -1765,8 +2108,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         },
       });
       yield* analytics.record("provider.turn.sent", {
-        provider: routed.adapter.provider,
-        model: input.modelSelection?.model,
+        provider: executedAdapter.provider,
+        model: executedTarget?.model,
         interactionMode: input.interactionMode,
         // Session-start events alone skew runtime mode toward users who toggle
         // often, since every toggle restarts the session. Recording it per turn

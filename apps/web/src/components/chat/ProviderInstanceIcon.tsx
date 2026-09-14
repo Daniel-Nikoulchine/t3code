@@ -1,11 +1,82 @@
 import { type CSSProperties, memo } from "react";
-import { type ProviderDriverKind } from "@t3tools/contracts";
-import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
+import { isProviderDriverKind, type ProviderDriverKind } from "@t3tools/contracts";
+import {
+  normalizeProviderAccentColor,
+  providerInstanceInitials,
+} from "@t3tools/client-runtime/state/provider-instance-display";
 
+import type { Icon } from "../Icons";
 import { PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 import { cn } from "~/lib/utils";
 
 export { providerInstanceInitials };
+
+/**
+ * Title presentation shared by the Harness instance editor
+ * (`ProviderInstanceCard`) and the backend-centric Providers tab: the
+ * display-name fallback order (explicit name, then driver label, then the
+ * raw driver slug), the normalized accent color, and the narrowed driver
+ * kind for the icon. Pure so the fallback order stays pinned by unit test.
+ */
+export function resolveProviderInstanceTitle(input: {
+  readonly displayName?: string | undefined;
+  readonly driverLabel?: string | undefined;
+  readonly driver: string;
+  readonly accentColor?: string | undefined;
+}): {
+  readonly displayName: string;
+  readonly accentColor: string | undefined;
+  readonly driverKind: ProviderDriverKind | null;
+} {
+  return {
+    displayName: input.displayName?.trim() || input.driverLabel || String(input.driver),
+    accentColor: normalizeProviderAccentColor(input.accentColor),
+    driverKind: isProviderDriverKind(input.driver) ? input.driver : null,
+  };
+}
+
+/**
+ * Header glyph for one provider instance title: the brand icon with its
+ * accent badge when the driver narrows to a driver kind, else the driver's
+ * fallback glyph, else the display-name initials. Same classes everywhere
+ * so the Harness editor and the Providers tab render identical titles.
+ */
+export function ProviderInstanceTitleIcon(props: {
+  readonly displayName: string;
+  readonly accentColor?: string | undefined;
+  readonly driverKind: ProviderDriverKind | null;
+  readonly fallbackIcon?: Icon | undefined;
+}) {
+  if (props.driverKind) {
+    return (
+      <ProviderInstanceIcon
+        driverKind={props.driverKind}
+        displayName={props.displayName}
+        accentColor={props.accentColor}
+        showBadge={Boolean(props.accentColor)}
+        className="size-5"
+        iconClassName="size-4 text-foreground/80"
+        badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
+      />
+    );
+  }
+  const FallbackIconComponent = props.fallbackIcon;
+  if (FallbackIconComponent) {
+    return (
+      <span className="inline-flex size-5 shrink-0 items-center justify-center">
+        <FallbackIconComponent className="size-4 text-foreground/80" aria-hidden />
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex size-5 shrink-0 items-center justify-center text-[10px] font-semibold leading-none text-foreground/80"
+      aria-hidden
+    >
+      {providerInstanceInitials(props.displayName)}
+    </span>
+  );
+}
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;

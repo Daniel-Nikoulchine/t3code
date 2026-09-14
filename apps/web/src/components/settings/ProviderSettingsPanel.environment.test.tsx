@@ -160,7 +160,7 @@ function isRefreshButton(element: ReactElement<Record<string, unknown>>): boolea
 }
 
 function isAddProviderButton(element: ReactElement<Record<string, unknown>>): boolean {
-  return element.props["aria-label"] === "Add provider";
+  return element.props["aria-label"] === "Add harness";
 }
 
 async function flushPromises(): Promise<void> {

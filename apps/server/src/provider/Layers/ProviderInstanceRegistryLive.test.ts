@@ -34,6 +34,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
+  type ZcodeSettings,
 } from "@t3tools/contracts";
 import { isHostWindows } from "@t3tools/shared/hostProcess";
 import * as DateTime from "effect/DateTime";
@@ -56,6 +57,7 @@ import { CursorDriver } from "../Drivers/CursorDriver.ts";
 import { GrokDriver } from "../Drivers/GrokDriver.ts";
 import { HermesDriver } from "../Drivers/HermesDriver.ts";
 import { OpenCodeDriver } from "../Drivers/OpenCodeDriver.ts";
+import { ZcodeDriver } from "../Drivers/ZcodeDriver.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import { OpenCodeRuntimeLive } from "../opencodeRuntime.ts";
 import * as CodexResetCredit from "./codexResetCredit.ts";
@@ -148,6 +150,12 @@ const makeOpenCodeConfig = (overrides: Partial<OpenCodeSettings>): OpenCodeSetti
   binaryPath: "opencode",
   serverUrl: "",
   serverPassword: "",
+  customModels: [],
+  ...overrides,
+});
+const makeZcodeConfig = (overrides: Partial<ZcodeSettings>): ZcodeSettings => ({
+  enabled: false,
+  binaryPath: "zcode",
   customModels: [],
   ...overrides,
 });
@@ -480,6 +488,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       const grokId = ProviderInstanceId.make("grok_default");
       const hermesId = ProviderInstanceId.make("hermes_default");
       const openCodeId = ProviderInstanceId.make("opencode_default");
+      const zcodeId = ProviderInstanceId.make("zcode_default");
 
       const codexDriverKind = ProviderDriverKind.make("codex");
       const claudeDriverKind = ProviderDriverKind.make("claudeAgent");
@@ -487,6 +496,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       const grokDriverKind = ProviderDriverKind.make("grok");
       const hermesDriverKind = ProviderDriverKind.make("hermes");
       const openCodeDriverKind = ProviderDriverKind.make("opencode");
+      const zcodeDriverKind = ProviderDriverKind.make("zcode");
 
       const configMap: ProviderInstanceConfigMap = {
         [codexId]: {
@@ -528,6 +538,12 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
           enabled: false,
           config: makeOpenCodeConfig({}),
         },
+        [zcodeId]: {
+          driver: zcodeDriverKind,
+          displayName: "ZCode",
+          enabled: false,
+          config: makeZcodeConfig({}),
+        },
       };
 
       const { registry } = yield* makeProviderInstanceRegistry<BuiltInDriversEnv>({
@@ -538,6 +554,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
           GrokDriver,
           HermesDriver,
           OpenCodeDriver,
+          ZcodeDriver,
         ],
         configMap,
       });
@@ -548,9 +565,9 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(unavailable).toEqual([]);
 
       const instances = yield* registry.listInstances;
-      expect(instances).toHaveLength(6);
+      expect(instances).toHaveLength(7);
       expect(instances.map((instance) => instance.instanceId).toSorted()).toEqual(
-        [codexId, claudeId, cursorId, grokId, hermesId, openCodeId].toSorted(),
+        [codexId, claudeId, cursorId, grokId, hermesId, openCodeId, zcodeId].toSorted(),
       );
 
       // Instance lookup by id resolves each instance to its own bundle —
@@ -562,18 +579,21 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       const grok = yield* registry.getInstance(grokId);
       const hermes = yield* registry.getInstance(hermesId);
       const openCode = yield* registry.getInstance(openCodeId);
+      const zcode = yield* registry.getInstance(zcodeId);
       expect(codex?.driverKind).toBe(codexDriverKind);
       expect(claude?.driverKind).toBe(claudeDriverKind);
       expect(cursor?.driverKind).toBe(cursorDriverKind);
       expect(grok?.driverKind).toBe(grokDriverKind);
       expect(hermes?.driverKind).toBe(hermesDriverKind);
       expect(openCode?.driverKind).toBe(openCodeDriverKind);
+      expect(zcode?.driverKind).toBe(zcodeDriverKind);
       expect(codex?.displayName).toBe("Codex");
       expect(claude?.displayName).toBe("Claude");
       expect(cursor?.displayName).toBe("Cursor");
       expect(grok?.displayName).toBe("Grok");
       expect(hermes?.displayName).toBe("Hermes");
       expect(openCode?.displayName).toBe("OpenCode");
+      expect(zcode?.displayName).toBe("ZCode");
 
       // Every instance owns its own set of closures — no sharing across
       // drivers. `adapter` / `textGeneration` / `snapshot` are all
@@ -587,6 +607,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         grok!.adapter,
         hermes!.adapter,
         openCode!.adapter,
+        zcode!.adapter,
       ];
       expect(new Set(adapters).size).toBe(adapters.length);
       const textGenerations = [
@@ -596,6 +617,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         grok!.textGeneration,
         hermes!.textGeneration,
         openCode!.textGeneration,
+        zcode!.textGeneration,
       ];
       expect(new Set(textGenerations).size).toBe(textGenerations.length);
       const snapshots = [
@@ -605,6 +627,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         grok!.snapshot,
         hermes!.snapshot,
         openCode!.snapshot,
+        zcode!.snapshot,
       ];
       expect(new Set(snapshots).size).toBe(snapshots.length);
 
@@ -657,6 +680,12 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(hermesSnapshot.driver).toBe(hermesDriverKind);
       expect(hermesSnapshot.enabled).toBe(false);
       expect(hermesSnapshot.continuation?.groupKey).toBe("hermes:home:/home/julius/.hermes-work");
+
+      const zcodeSnapshot = yield* zcode!.snapshot.getSnapshot;
+      expect(zcodeSnapshot.instanceId).toBe(zcodeId);
+      expect(zcodeSnapshot.driver).toBe(zcodeDriverKind);
+      expect(zcodeSnapshot.enabled).toBe(false);
+      expect(zcodeSnapshot.continuation?.groupKey).toBe(`${zcodeDriverKind}:instance:${zcodeId}`);
     }).pipe(Effect.provide(testLayer)),
   );
 });

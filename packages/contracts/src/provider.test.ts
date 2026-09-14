@@ -157,6 +157,29 @@ describe("ProviderSendTurnInput", () => {
     expect(getOptionValue(parsed.modelSelection?.options, "effort")).toBe("ultrathink");
     expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
   });
+
+  it("carries an optional thread fallback combo", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      combo: {
+        targets: [
+          { instanceId: "opencode_personal", model: "claude-sonnet-4-5" },
+          { instanceId: "opencode_proxy", model: "gpt-5" },
+        ],
+        strategy: "priority",
+      },
+    });
+
+    expect(parsed.combo?.targets).toHaveLength(2);
+    expect(parsed.combo?.targets[0]?.instanceId).toBe("opencode_personal");
+    expect(parsed.combo?.strategy).toBe("priority");
+  });
+
+  it("decodes a legacy send-turn input without combo as undefined", () => {
+    const parsed = decodeProviderSendTurnInput({ threadId: "thread-1" });
+
+    expect(parsed.combo).toBeUndefined();
+  });
 });
 
 describe("provider feedback", () => {

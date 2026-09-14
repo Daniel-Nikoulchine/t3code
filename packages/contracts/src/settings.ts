@@ -38,6 +38,9 @@ import {
   ProviderInstanceId,
   type ProviderDriverKind,
 } from "./providerInstance.ts";
+import { ModelBackendConnections } from "./modelBackend.ts";
+import { ModelCredentials } from "./modelCredentials.ts";
+import { ModelRouterRoutes } from "./modelRouter.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
@@ -729,6 +732,110 @@ export const GrokSettings = makeProviderSettingsSchema(
 );
 export type GrokSettings = typeof GrokSettings.Type;
 
+export const DeepSeekSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor and Grok): the binding is not yet
+    // stable enough to probe on every install. Users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("dsh").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the DeepSeek Harness CLI binary.",
+        providerSettingsForm: { placeholder: "dsh", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type DeepSeekSettings = typeof DeepSeekSettings.Type;
+
+export const CopilotSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/OpenCode): the binding is not yet
+    // stable enough to probe on every install. Users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("copilot").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the GitHub Copilot CLI binary.",
+        providerSettingsForm: { placeholder: "copilot", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type CopilotSettings = typeof CopilotSettings.Type;
+
+export const DroidSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/OpenCode): the binding is not yet
+    // stable enough to probe on every install. Users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("droid").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Factory Droid CLI binary.",
+        providerSettingsForm: { placeholder: "droid", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type DroidSettings = typeof DroidSettings.Type;
+
+export const DevinSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/OpenCode): opt-in from Settings until
+    // the `devin acp` binding proves stable across installs.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("devin").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Devin CLI binary.",
+        providerSettingsForm: { placeholder: "devin", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type DevinSettings = typeof DevinSettings.Type;
+
 export const HermesSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor/Grok/OpenCode): the binding is not yet
@@ -762,6 +869,208 @@ export const HermesSettings = makeProviderSettingsSchema(
   },
 );
 export type HermesSettings = typeof HermesSettings.Type;
+
+export const ClineSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/Hermes/OpenCode): the binding is not
+    // yet stable enough to probe on every install. Users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("cline").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Cline CLI binary.",
+        providerSettingsForm: { placeholder: "cline", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type ClineSettings = typeof ClineSettings.Type;
+
+export const KiloSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/OpenCode): the binding is not yet
+    // stable enough to probe on every install. Users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("kilo").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Kilo Code CLI binary (`kilo` from @kilocode/cli).",
+        providerSettingsForm: { placeholder: "kilo", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type KiloSettings = typeof KiloSettings.Type;
+
+export const PiSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/Hermes/OpenCode): users opt in from
+    // Settings once `pi` is installed and authenticated (`/login` or keys).
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("pi").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the Pi coding-agent CLI binary.",
+        providerSettingsForm: { placeholder: "pi", clearWhenEmpty: "omit" },
+      }),
+    ),
+    homePath: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "PI_CODING_AGENT_DIR path",
+        description: "Custom Pi configuration directory (agent settings, auth, sessions).",
+        providerSettingsForm: {
+          placeholder: "~/.pi/agent",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "homePath"],
+  },
+);
+export type PiSettings = typeof PiSettings.Type;
+
+export const OMP_THINKING_LEVELS = [
+  { value: "off", label: "Off" },
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+] as const satisfies ReadonlyArray<ProviderSettingsFormOption>;
+export const OmpThinkingLevel = Schema.Literals(OMP_THINKING_LEVELS.map((level) => level.value));
+export type OmpThinkingLevel = typeof OmpThinkingLevel.Type;
+
+export const OmpSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/OpenCode): the binding is not yet
+    // stable enough to probe on every install. Users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("omp").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description:
+          "Path to the Oh My Pi CLI binary. Point it at `pi` to use upstream Pi instead.",
+        providerSettingsForm: { placeholder: "omp", clearWhenEmpty: "omit" },
+      }),
+    ),
+    agentDir: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Agent directory",
+        description: "Custom agent directory (PI_AGENT_DIR) with settings, auth, and sessions.",
+        providerSettingsForm: {
+          placeholder: "~/.pi/agent",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    provider: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Provider",
+        description: "Default model provider (e.g. anthropic, openai, google).",
+        providerSettingsForm: {
+          placeholder: "harness default",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    model: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Model",
+        description: "Default model pattern or ID. Supports `provider/id` form.",
+        providerSettingsForm: {
+          placeholder: "harness default",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    thinkingLevel: OmpThinkingLevel.pipe(
+      Schema.withDecodingDefault(Effect.succeed("low" as const)),
+      Schema.annotateKey({
+        title: "Thinking level",
+        description: "Reasoning effort for models that support it.",
+        providerSettingsForm: {
+          control: "select",
+          options: OMP_THINKING_LEVELS,
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "agentDir", "provider", "model", "thinkingLevel"],
+  },
+);
+export type OmpSettings = typeof OmpSettings.Type;
+
+/**
+ * ZCode (Z.ai GLM harness) settings. The `zcode` CLI speaks the ZCode
+ * Protocol over stdio (`zcode app-server`); model catalog, sessions, and
+ * skills all flow through that server. Off by default like Cursor/Grok:
+ * users opt in from Settings.
+ */
+export const ZcodeSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("zcode").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the ZCode CLI binary (zcode-app-cli).",
+        providerSettingsForm: { placeholder: "zcode", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type ZcodeSettings = typeof ZcodeSettings.Type;
 
 /**
  * Antigravity ACP auth methods. Personal and Enterprise open a Google sign-in
@@ -895,6 +1204,72 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
   },
 );
 export type OpenCodeSettings = typeof OpenCodeSettings.Type;
+
+export const OpenClawSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/Hermes/OpenCode): the binding needs a
+    // running OpenClaw Gateway for `openclaw acp`, so users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("openclaw").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the OpenClaw CLI binary.",
+        providerSettingsForm: {
+          placeholder: "openclaw",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    gatewayUrl: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Gateway URL",
+        description:
+          "WebSocket URL of the running OpenClaw Gateway used by `openclaw acp`. Leave empty to use the gateway.remote.url from OpenClaw config.",
+        providerSettingsForm: {
+          placeholder: "ws://127.0.0.1:18789",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    gatewayToken: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Gateway token",
+        description:
+          "Shared gateway token when the gateway requires auth. Stored in plain text on disk.",
+        providerSettingsForm: {
+          control: "password",
+          placeholder: "Optional",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    sessionKey: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Session key",
+        description:
+          "Default OpenClaw session key for the ACP bridge (e.g. agent:main:main). Leave empty for the gateway default.",
+        providerSettingsForm: {
+          placeholder: "agent:main:main",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath", "gatewayUrl", "gatewayToken", "sessionKey"],
+  },
+);
+export type OpenClawSettings = typeof OpenClawSettings.Type;
 
 /**
  * A read-only quota source outside this environment's provider CLIs. The
@@ -1191,9 +1566,19 @@ export const ServerSettings = Schema.Struct({
     claudeAgent: ClaudeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    deepseek: DeepSeekSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    copilot: CopilotSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    droid: DroidSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    devin: DevinSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     hermes: HermesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    cline: ClineSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    kilo: KiloSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    omp: OmpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    zcode: ZcodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    openclaw: OpenClawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -1203,6 +1588,32 @@ export const ServerSettings = Schema.Struct({
   providerInstances: Schema.Record(ProviderInstanceId, ProviderInstanceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /**
+   * Named model backend connections (each an OpenAI-compatible `/v1`
+   * endpoint). Provider instances reference an entry via
+   * `ProviderInstanceConfig.connectionId`; the registry synthesizes the
+   * per-instance backend overlay from the referenced value. Absent/empty
+   * means no connections (all instances native).
+   */
+  modelBackendConnections: ModelBackendConnections.pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  /**
+   * Stored API keys for the model-routing layer, keyed by
+   * `ModelCredentialId`. Referenced by `ModelProxyConfig.apiKeyCredentialId`
+   * and model-router route targets. Values are redacted to
+   * `MODEL_CREDENTIAL_VALUE_REDACTED` before any client sees them; the real
+   * value lives in the server secret store. OAuth/subscription credentials
+   * are intentionally not expressible here — those stay harness-bound.
+   */
+  modelCredentials: ModelCredentials.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  /**
+   * Logical model id slug → upstream route for the built-in local
+   * translation proxy (the `t3-router` backend kind). Keys are what harnesses
+   * put in the `model` field; unknown keys are a 404 at the proxy, never a
+   * fallback. See `modelRouter.ts`.
+   */
+  modelRouterRoutes: ModelRouterRoutes.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
@@ -1349,7 +1760,66 @@ const GrokSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
 });
 
+const DeepSeekSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const CopilotSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+const DevinSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 const HermesSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  homePath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const ClineSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const KiloSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const ZcodeSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
+const OmpSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  agentDir: Schema.optionalKey(TrimmedString),
+  provider: Schema.optionalKey(TrimmedString),
+  model: Schema.optionalKey(TrimmedString),
+  thinkingLevel: Schema.optionalKey(OmpThinkingLevel),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+const DroidSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+const PiSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   homePath: Schema.optionalKey(TrimmedString),
@@ -1372,6 +1842,15 @@ const OpenCodeSettingsPatch = Schema.Struct({
   serverUrl: Schema.optionalKey(TrimmedString),
   serverPassword: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
+const OpenClawSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  gatewayUrl: Schema.optionalKey(TrimmedString),
+  gatewayToken: Schema.optionalKey(TrimmedString),
+  sessionKey: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
 export const ServerSettingsPatch = Schema.Struct({
@@ -1446,9 +1925,19 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(ClaudeSettingsPatch),
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
+      deepseek: Schema.optionalKey(DeepSeekSettingsPatch),
+      copilot: Schema.optionalKey(CopilotSettingsPatch),
+      droid: Schema.optionalKey(DroidSettingsPatch),
+      devin: Schema.optionalKey(DevinSettingsPatch),
       hermes: Schema.optionalKey(HermesSettingsPatch),
+      cline: Schema.optionalKey(ClineSettingsPatch),
+      kilo: Schema.optionalKey(KiloSettingsPatch),
+      omp: Schema.optionalKey(OmpSettingsPatch),
+      zcode: Schema.optionalKey(ZcodeSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
+      openclaw: Schema.optionalKey(OpenClawSettingsPatch),
+      pi: Schema.optionalKey(PiSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual
@@ -1456,6 +1945,22 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Whole-map replacement for the connections map, like
+  // `providerInstances` below: the map is small, clients send it
+  // fully-formed, and per-entry merging risks leaving a connection in a
+  // half-edited state. Sending the whole map also avoids the
+  // concurrent-edit races that per-entry upserts (usageLimitSources)
+  // exist to solve — there is exactly one editor surface for this map.
+  modelBackendConnections: Schema.optionalKey(ModelBackendConnections),
+  // Whole-map replacement for the credentials map, like
+  // `modelBackendConnections`: small map, one editor surface, and the
+  // `MODEL_CREDENTIAL_VALUE_REDACTED` sentinel keeps an unchanged secret
+  // intact across a whole-map resend (same contract as `managementKey`).
+  modelCredentials: Schema.optionalKey(ModelCredentials),
+  // Whole-map replacement for the routes map, like `modelBackendConnections`:
+  // small map, one editor surface, keys are model slugs whose resolution
+  // (route key vs `upstreamModel`) only makes sense against the full map.
+  modelRouterRoutes: Schema.optionalKey(ModelRouterRoutes),
   // Per-entry, unlike `providerInstances`: a client only ever adds or removes
   // one source, and sending the whole map races another edit that has not
   // echoed back yet. `null` removes; the server merges into its current map.

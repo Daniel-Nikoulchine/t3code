@@ -15,6 +15,7 @@ import {
   getAppModelOptionsForInstance,
   resolveAppModelSelectionForInstance,
   resolveAppModelSelectionState,
+  resolveHarnessSwitchModel,
   resolvePlanAgentHealPatch,
   withoutPlanAgentSelection,
 } from "./modelSelection";
@@ -912,5 +913,38 @@ describe("resolvePlanAgentHealPatch", () => {
         sourceControlWriterModelSelection: storedPlan,
       }),
     ).toEqual({ sourceControlWriterModelSelection: healed });
+  });
+});
+
+describe("resolveHarnessSwitchModel", () => {
+  it("keeps the current model when the target harness offers it", () => {
+    expect(
+      resolveHarnessSwitchModel(
+        [{ slug: "gpt-5", isDefault: true }, { slug: "gpt-5-mini" }],
+        "gpt-5-mini",
+      ),
+    ).toBe("gpt-5-mini");
+  });
+
+  it("prefers the target default model over the current one when unavailable there", () => {
+    expect(
+      resolveHarnessSwitchModel(
+        [{ slug: "gpt-5", isDefault: true }, { slug: "gpt-5-mini" }],
+        "claude-model",
+      ),
+    ).toBe("gpt-5");
+  });
+
+  it("skips unavailable and legacy models before falling back", () => {
+    expect(
+      resolveHarnessSwitchModel(
+        [{ slug: "old", isLegacy: true }, { slug: "gone", isUnavailable: true }, { slug: "fresh" }],
+        "claude-model",
+      ),
+    ).toBe("fresh");
+  });
+
+  it("returns undefined when the target harness has no models", () => {
+    expect(resolveHarnessSwitchModel([], "gpt-5")).toBeUndefined();
   });
 });

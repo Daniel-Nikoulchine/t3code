@@ -58,6 +58,7 @@ import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
+import { ModelRouterProxyLive } from "./provider/router/ModelRouterProxy.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
@@ -83,6 +84,7 @@ import * as ThreadPullRequestReactor from "./orchestration/ThreadPullRequestReac
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
+import * as BackendLastVerified from "./provider/backendLastVerified.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -532,6 +534,17 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
     Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer, UsageLimitSources.layer),
   ),
   Layer.provideMerge(ProviderRegistryLive),
+  // One shared verification-tracker instance for `ProviderService` (records
+  // on executed turns) and `ProviderRegistry` (stamps published snapshots).
+  // Merged once here so both read the same table; layers built without it
+  // (tests, partial harnesses) run unstamped instead of failing.
+  Layer.provideMerge(BackendLastVerified.layer),
+  // The built-in model router (t3-router) is the loopback translation proxy
+  // instances can route through via the reserved "t3-router" connection id;
+  // it must be up before hydration reads its base URL to synthesize that
+  // connection. Bind failure degrades to `baseUrl: undefined`, never a boot
+  // failure.
+  Layer.provideMerge(ModelRouterProxyLive),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;

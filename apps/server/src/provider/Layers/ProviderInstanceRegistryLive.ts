@@ -33,8 +33,12 @@
  * @module provider/Layers/ProviderInstanceRegistryLive
  */
 import {
+  MODEL_CREDENTIAL_VALUE_REDACTED,
   providerInstanceConfigEnabledFlag,
   ProviderInstanceId,
+  type ModelBackendConfig,
+  type ModelBackendConnections,
+  type ModelCredentials,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   type ProviderDriverKind,
@@ -81,6 +85,18 @@ interface RegistryState {
   readonly entries: Ref.Ref<ReadonlyMap<ProviderInstanceId, LiveEntry>>;
   readonly unavailable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ServerProvider>>;
   readonly changes: PubSub.PubSub<void>;
+  /**
+   * Last reconciled connections map. Tracked so a connection edit rebuilds
+   * exactly the instances whose resolved backend changed — envelope
+   * equality alone cannot see it.
+   */
+  readonly connections: Ref.Ref<ModelBackendConnections>;
+  /**
+   * Last reconciled credentials map. Tracked so a credential value change
+   * or removal rebuilds exactly the instances whose resolved backend
+   * carries that credential's value as `apiKey`.
+   */
+  readonly credentials: Ref.Ref<ModelCredentials>;
 }
 
 /**
@@ -110,6 +126,58 @@ const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown
 };
 
 /**
+ * Resolve the per-instance backend overlay from the `connectionId`
+ * reference plus the connections map. The only place `connectionId` /
+ * `modelBackendConnections` turn into a driver `backend`: everything
+ * downstream (driver env merge, snapshot stamp, probe, tracking, fallback)
+ * keeps consuming `backend` unchanged.
+ *
+ * Absent `connectionId` means native. An orphan `connectionId` (no matching
+ * map entry, e.g. after the connection was deleted) also stays native —
+ * silently, no error. Deleting a connection must never leave referencing
+ * instances in a broken state; they simply fall back to direct harness
+ * connections. The settings UI surfaces the orphan hint (UI task).
+ *
+ * A credential reference (`ModelProxyConfig.apiKeyCredentialId`) resolves
+ * against the credentials map — the registry receives materialized
+ * settings, so values are real keys. An empty value means "no key" and the
+ * redaction sentinel is never mistaken for one; either leaves the backend
+ * keyless rather than sending a placeholder upstream.
+ */
+const resolveInstanceBackend = (
+  entry: ProviderInstanceConfig,
+  connections: ModelBackendConnections | undefined,
+  credentials: ModelCredentials | undefined,
+): ModelBackendConfig | undefined => {
+  const connectionId = entry.connectionId;
+  if (connectionId === undefined) {
+    return undefined;
+  }
+  const connection = connections?.[connectionId];
+  if (connection === undefined) {
+    return undefined;
+  }
+  const credentialId = connection.apiKeyCredentialId;
+  const credentialValue =
+    credentialId === undefined ? undefined : credentials?.[credentialId]?.value;
+  const apiKey =
+    credentialValue !== undefined &&
+    credentialValue.length > 0 &&
+    credentialValue !== MODEL_CREDENTIAL_VALUE_REDACTED
+      ? credentialValue
+      : undefined;
+  return {
+    kind: "openai-compatible",
+    baseUrl: connection.baseUrl,
+    ...(apiKey === undefined ? {} : { apiKey }),
+    ...(connection.apiKeyEnv === undefined ? {} : { apiKeyEnv: connection.apiKeyEnv }),
+    ...(connection.displayName === undefined ? {} : { displayName: connection.displayName }),
+    ...(connection.protocols === undefined ? {} : { protocols: connection.protocols }),
+    ...(connection.models === undefined ? {} : { models: connection.models }),
+  };
+};
+
+/**
  * Build one live entry from a raw config envelope. Returns either a
  * `LiveEntry` plus undefined unavailable shadow, or a shadow snapshot and
  * undefined entry — callers dispatch to the appropriate Ref bucket.
@@ -120,6 +188,8 @@ const buildEntry = <R>(input: {
   readonly instanceId: ProviderInstanceId;
   readonly rawInstanceId: string;
   readonly entry: ProviderInstanceConfig;
+  readonly connections: ModelBackendConnections | undefined;
+  readonly credentials: ModelCredentials | undefined;
 }): Effect.Effect<
   | { readonly kind: "live"; readonly live: LiveEntry }
   | { readonly kind: "unavailable"; readonly snapshot: ServerProvider },
@@ -127,7 +197,8 @@ const buildEntry = <R>(input: {
   R
 > =>
   Effect.gen(function* () {
-    const { driversById, parentScope, instanceId, rawInstanceId, entry } = input;
+    const { driversById, parentScope, instanceId, rawInstanceId, entry, connections, credentials } =
+      input;
     const driver = driversById.get(entry.driver);
     if (!driver) {
       return {
@@ -173,6 +244,7 @@ const buildEntry = <R>(input: {
     // finalizer is a no-op because `Scope.close` is idempotent.
     yield* Scope.addFinalizer(parentScope, Scope.close(childScope, Exit.void).pipe(Effect.ignore));
 
+    const backend = resolveInstanceBackend(entry, connections, credentials);
     const createResult = yield* driver
       .create({
         instanceId,
@@ -181,6 +253,7 @@ const buildEntry = <R>(input: {
         environment: entry.environment ?? [],
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
+        ...(backend === undefined ? {} : { backend }),
       })
       .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
     if (createResult._tag === "Failure") {
@@ -220,12 +293,26 @@ const makeReconcile = <R>(input: {
   readonly state: RegistryState;
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
-}): ((configMap: ProviderInstanceConfigMap) => Effect.Effect<void, never, R>) => {
+}): ((
+  configMap: ProviderInstanceConfigMap,
+  connections?: ModelBackendConnections,
+  credentials?: ModelCredentials,
+) => Effect.Effect<void, never, R>) => {
   const { state, driversById, parentScope } = input;
-  return (configMap: ProviderInstanceConfigMap) =>
+  return (
+    configMap: ProviderInstanceConfigMap,
+    connections?: ModelBackendConnections,
+    credentials?: ModelCredentials,
+  ) =>
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
       const previousUnavailable = yield* Ref.get(state.unavailable);
+      const previousConnections = yield* Ref.get(state.connections);
+      const previousCredentials = yield* Ref.get(state.credentials);
+      // Absent counts as "no connections" / "no credentials" — normalize so
+      // a caller that omits either map does not churn referencing instances.
+      const nextConnections: ModelBackendConnections = connections ?? {};
+      const nextCredentials: ModelCredentials = credentials ?? {};
       const nextRaw = Object.entries(configMap);
       const nextKeys = new Set<ProviderInstanceId>(
         nextRaw.map(([raw]) => ProviderInstanceId.make(raw)),
@@ -244,6 +331,23 @@ const makeReconcile = <R>(input: {
         const nextEntry = configMap[instanceId];
         if (nextEntry !== undefined && !entryEqual(live.entry, nextEntry)) {
           replacedIds.add(instanceId);
+          continue;
+        }
+        // The envelope is unchanged but the resolved backend may have
+        // moved (connection edited/added/deleted, credential value
+        // changed/removed): rebuild exactly the instances whose resolved
+        // backend changed — direct instances and instances on untouched
+        // connections/credentials keep their closures.
+        if (nextEntry !== undefined) {
+          const previousBackend = resolveInstanceBackend(
+            nextEntry,
+            previousConnections,
+            previousCredentials,
+          );
+          const nextBackend = resolveInstanceBackend(nextEntry, nextConnections, nextCredentials);
+          if (!Equal.equals(previousBackend, nextBackend)) {
+            replacedIds.add(instanceId);
+          }
         }
       }
       for (const id of [...removedIds, ...replacedIds]) {
@@ -278,6 +382,8 @@ const makeReconcile = <R>(input: {
           instanceId,
           rawInstanceId,
           entry,
+          connections: nextConnections,
+          credentials: nextCredentials,
         });
         if (result.kind === "live") {
           builtEntries.set(instanceId, result.live);
@@ -312,6 +418,8 @@ const makeReconcile = <R>(input: {
 
       yield* Ref.set(state.entries, builtEntries);
       yield* Ref.set(state.unavailable, builtUnavailable);
+      yield* Ref.set(state.connections, nextConnections);
+      yield* Ref.set(state.credentials, nextCredentials);
 
       if (entriesChanged || unavailableChanged) {
         yield* PubSub.publish(state.changes, undefined);
@@ -338,6 +446,8 @@ const makeReconcile = <R>(input: {
 export const makeProviderInstanceRegistry = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
+  readonly connections?: ModelBackendConnections;
+  readonly credentials?: ModelCredentials;
 }): Effect.Effect<
   {
     readonly registry: ProviderInstanceRegistryShape;
@@ -367,15 +477,23 @@ export const makeProviderInstanceRegistry = <R>(input: {
     const unavailable = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProvider>>(new Map());
     const changes = yield* PubSub.unbounded<void>();
     yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
+    const connections = yield* Ref.make<ModelBackendConnections>({});
+    const credentials = yield* Ref.make<ModelCredentials>({});
 
-    const state: RegistryState = { entries, unavailable, changes };
+    const state: RegistryState = { entries, unavailable, changes, connections, credentials };
     const reconcileWithR = makeReconcile({ state, driversById, parentScope });
-    const reconcile: ProviderInstanceRegistryMutatorShape["reconcile"] = (configMap) =>
-      reconcileWithR(configMap).pipe(Effect.provideContext(driverContext));
+    const reconcile: ProviderInstanceRegistryMutatorShape["reconcile"] = (
+      configMap,
+      nextConnections,
+      nextCredentials,
+    ) =>
+      reconcileWithR(configMap, nextConnections, nextCredentials).pipe(
+        Effect.provideContext(driverContext),
+      );
 
     // Hydrate the initial configMap synchronously so callers can read
     // `listInstances` immediately after this effect completes.
-    yield* reconcile(input.configMap);
+    yield* reconcile(input.configMap, input.connections, input.credentials);
 
     const registry: ProviderInstanceRegistryShape = {
       getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
@@ -419,6 +537,8 @@ export const makeProviderInstanceRegistry = <R>(input: {
 export const ProviderInstanceRegistryMutableLayer = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
+  readonly connections?: ModelBackendConnections;
+  readonly credentials?: ModelCredentials;
 }): Layer.Layer<ProviderInstanceRegistry | ProviderInstanceRegistryMutator, never, R> =>
   Layer.effectContext(
     makeProviderInstanceRegistry(input).pipe(

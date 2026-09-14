@@ -147,8 +147,18 @@ const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
+const DEEPSEEK_DRIVER_KIND = ProviderDriverKind.make("deepseek");
+const COPILOT_DRIVER_KIND = ProviderDriverKind.make("copilot");
+const DROID_DRIVER_KIND = ProviderDriverKind.make("droid");
+const DEVIN_DRIVER_KIND = ProviderDriverKind.make("devin");
 const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
+const CLINE_DRIVER_KIND = ProviderDriverKind.make("cline");
+const KILO_DRIVER_KIND = ProviderDriverKind.make("kilo");
+const OMP_DRIVER_KIND = ProviderDriverKind.make("omp");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
+const OPENCLAW_DRIVER_KIND = ProviderDriverKind.make("openclaw");
+const PI_DRIVER_KIND = ProviderDriverKind.make("pi");
+const ZCODE_DRIVER_KIND = ProviderDriverKind.make("zcode");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
 
@@ -173,8 +183,21 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [CURSOR_DRIVER_KIND]: "auto",
   // Product slug, not an ACP model id. The Grok adapter treats it as "the session's current model".
   [GROK_DRIVER_KIND]: "grok-build",
+  [DEEPSEEK_DRIVER_KIND]: "deepseek-v4-flash",
+  [COPILOT_DRIVER_KIND]: "auto",
+  [DROID_DRIVER_KIND]: "auto",
+  [DEVIN_DRIVER_KIND]: "devin-default",
   [HERMES_DRIVER_KIND]: "default",
+  [CLINE_DRIVER_KIND]: "default",
+  // Product slug, not an ACP model id. The Kilo adapter treats it as "the session's current model".
+  [KILO_DRIVER_KIND]: "auto",
+  [OMP_DRIVER_KIND]: "default",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  [OPENCLAW_DRIVER_KIND]: "default",
+  [PI_DRIVER_KIND]: "default",
+  // ZCode model id as advertised by `workspace/readState` modelCatalog
+  // (`providerId/modelId` collapses to the bare model id on the wire).
+  [ZCODE_DRIVER_KIND]: "glm-5.2",
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
 };
 
@@ -186,8 +209,18 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
   [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
   [CURSOR_DRIVER_KIND]: "composer-2",
+  [DEEPSEEK_DRIVER_KIND]: "deepseek-v4-flash",
+  [DEVIN_DRIVER_KIND]: "devin-default",
+  [COPILOT_DRIVER_KIND]: "auto",
+  [DROID_DRIVER_KIND]: "auto",
   [HERMES_DRIVER_KIND]: "default",
+  [CLINE_DRIVER_KIND]: "default",
+  [KILO_DRIVER_KIND]: "auto",
+  [OMP_DRIVER_KIND]: "default",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
+  [OPENCLAW_DRIVER_KIND]: "default",
+  [PI_DRIVER_KIND]: "default",
+  [ZCODE_DRIVER_KIND]: "glm-5-turbo",
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
@@ -224,6 +257,16 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [CLAUDE_DRIVER_KIND]: "Claude",
   [CURSOR_DRIVER_KIND]: "Cursor",
   [GROK_DRIVER_KIND]: "Grok",
+  [DEEPSEEK_DRIVER_KIND]: "DeepSeek",
+  [COPILOT_DRIVER_KIND]: "Copilot",
+  [DROID_DRIVER_KIND]: "Droid",
+  [DEVIN_DRIVER_KIND]: "Devin",
   [HERMES_DRIVER_KIND]: "Hermes",
+  [CLINE_DRIVER_KIND]: "Cline",
+  [KILO_DRIVER_KIND]: "Kilo",
+  [OMP_DRIVER_KIND]: "Oh My Pi",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
+  [OPENCLAW_DRIVER_KIND]: "OpenClaw",
+  [PI_DRIVER_KIND]: "Pi",
+  [ZCODE_DRIVER_KIND]: "ZCode",
 };

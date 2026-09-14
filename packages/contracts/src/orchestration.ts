@@ -125,6 +125,44 @@ export const ModelSelection = ModelSelectionSource.pipe(
 );
 export type ModelSelection = typeof ModelSelection.Type;
 
+/**
+ * `FallbackCombo` — an ordered set of turn-level fallback targets for a thread.
+ *
+ * Data plumbing only: the combo is stored on the thread and passed through to
+ * `sendTurn` requests. Execution (strategy evaluation, retry, `model.rerouted`
+ * emission) lives server-side and is deliberately not part of this schema.
+ * Only `priority` + `headroom` + `lkgp` strategies exist (no cost-optimized /
+ * fusion / pipeline). Lives here next to `ModelSelection` (instead of
+ * `fallbackCombo.ts`) because that module imports `ModelSelection` from here —
+ * importing it back would create an ESM evaluation cycle with an uninitialized
+ * `ModelSelection` binding. `fallbackCombo.ts` re-exports these definitions.
+ */
+export const FallbackStrategy = Schema.Literals(["priority", "headroom", "lkgp"]);
+export type FallbackStrategy = typeof FallbackStrategy.Type;
+
+export const FallbackTrigger = Schema.Literals(["rate-limit", "provider-error", "transport-error"]);
+export type FallbackTrigger = typeof FallbackTrigger.Type;
+
+export const FallbackComboTarget = ModelSelection;
+export type FallbackComboTarget = typeof FallbackComboTarget.Type;
+
+export const DEFAULT_FALLBACK_STRATEGY: FallbackStrategy = "priority";
+export const DEFAULT_FALLBACK_TRIGGERS: ReadonlyArray<FallbackTrigger> = [
+  "rate-limit",
+  "provider-error",
+];
+
+export const FallbackCombo = Schema.Struct({
+  targets: Schema.Array(FallbackComboTarget).check(Schema.isMinLength(1)),
+  strategy: FallbackStrategy.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLBACK_STRATEGY)),
+  ),
+  fallbackOn: Schema.Array(FallbackTrigger).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLBACK_TRIGGERS)),
+  ),
+});
+export type FallbackCombo = typeof FallbackCombo.Type;
+
 export const RuntimeMode = Schema.Literals([
   "approval-required",
   "auto-accept-edits",
@@ -709,6 +747,10 @@ export const OrchestrationThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
+  // Ordered turn-level fallback targets. Optional so payloads from pre-combo
+  // servers still decode (absent = manual ModelSelection, no fallback).
+  // Null clears a previously set combo (back to manual ModelSelection).
+  combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
@@ -795,6 +837,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
+  // See OrchestrationThread.combo: absent on pre-combo servers, null clears.
+  combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
@@ -1028,6 +1072,8 @@ const ThreadCreateCommand = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
+  // Absent = no fallback; null clears (accepted for symmetry with meta.update).
+  combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
@@ -1142,6 +1188,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   regenerateTitle: Schema.optional(Schema.Literal(true)),
   modelSelection: Schema.optional(ModelSelection),
+  // Absent = leave unchanged; null = clear the combo (back to manual ModelSelection).
+  combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1600,6 +1648,8 @@ export const ThreadCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
+  // Absent on pre-combo events; null clears (see OrchestrationThread.combo).
+  combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
@@ -1689,6 +1739,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   /** Pending state shared with clients. Null clears a matching request. */
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   modelSelection: Schema.optional(ModelSelection),
+  // Absent = unchanged; null = cleared. Carried into the read model as-is.
+  combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // No longer produced; kept so persisted events from before

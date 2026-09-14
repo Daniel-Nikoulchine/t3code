@@ -599,6 +599,159 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   }),
 );
 
+it.effect("decodes thread.create with a fallback combo", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.create",
+      commandId: "cmd-combo-create",
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Combo thread",
+      modelSelection: { instanceId: "opencode_personal", model: "claude-sonnet-4-5" },
+      runtimeMode: "full-access",
+      branch: null,
+      worktreePath: null,
+      combo: {
+        targets: [
+          { instanceId: "opencode_personal", model: "claude-sonnet-4-5" },
+          { instanceId: "opencode_proxy", model: "gpt-5" },
+        ],
+        strategy: "priority",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.type, "thread.create");
+    if (parsed.type !== "thread.create") return;
+    assert.strictEqual(parsed.combo?.targets.length, 2);
+    assert.strictEqual(parsed.combo?.targets[0]?.instanceId, "opencode_personal");
+    assert.strictEqual(parsed.combo?.strategy, "priority");
+    assert.deepStrictEqual(parsed.combo?.fallbackOn, ["rate-limit", "provider-error"]);
+  }),
+);
+
+it.effect("decodes thread.meta.update setting and clearing a fallback combo", () =>
+  Effect.gen(function* () {
+    const set = yield* decodeOrchestrationCommand({
+      type: "thread.meta.update",
+      commandId: "cmd-combo-set",
+      threadId: "thread-1",
+      combo: {
+        targets: [{ instanceId: "opencode_personal", model: "claude-sonnet-4-5" }],
+      },
+    });
+    assert.strictEqual(set.type, "thread.meta.update");
+    if (set.type !== "thread.meta.update") return;
+    assert.strictEqual(set.combo?.targets.length, 1);
+    // Strategy defaults when absent, like thread-level decoding.
+    assert.strictEqual(set.combo?.strategy, "priority");
+
+    const clear = yield* decodeOrchestrationCommand({
+      type: "thread.meta.update",
+      commandId: "cmd-combo-clear",
+      threadId: "thread-1",
+      combo: null,
+    });
+    assert.strictEqual(clear.type, "thread.meta.update");
+    if (clear.type !== "thread.meta.update") return;
+    assert.strictEqual(clear.combo, null);
+  }),
+);
+
+it.effect("round-trips a fallback combo through thread.created", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadCreatedPayload({
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Thread title",
+      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      combo: {
+        targets: [{ instanceId: "codex", model: "gpt-5.4" }],
+        strategy: "lkgp",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.combo?.strategy, "lkgp");
+
+    const encoded = yield* encodeThreadCreatedPayload(parsed);
+    assert.deepStrictEqual((encoded as Record<string, unknown>).combo, {
+      targets: [{ instanceId: "codex", model: "gpt-5.4" }],
+      strategy: "lkgp",
+      fallbackOn: ["rate-limit", "provider-error"],
+    });
+  }),
+);
+
+it.effect("decodes legacy threads and payloads without a combo as undefined", () =>
+  Effect.gen(function* () {
+    const created = yield* decodeThreadCreatedPayload({
+      threadId: "thread-1",
+      projectId: "project-1",
+      title: "Legacy thread",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(created.combo, undefined);
+
+    const metaUpdated = yield* decodeThreadMetaUpdatedPayload({
+      threadId: "thread-1",
+      title: "Renamed",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(metaUpdated.combo, undefined);
+
+    const thread = yield* decodeOrchestrationThread({
+      id: "thread-1",
+      projectId: "project-1",
+      title: "Legacy thread",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      deletedAt: null,
+      messages: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+    });
+    assert.strictEqual(thread.combo, undefined);
+
+    const shell = yield* decodeOrchestrationThreadShell({
+      id: "thread-1",
+      projectId: "project-1",
+      title: "Legacy thread",
+      modelSelection: { provider: "codex", model: "gpt-5.4" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      latestTurn: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      archivedAt: null,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    });
+    assert.strictEqual(shell.combo, undefined);
+  }),
+);
+
 it.effect("decodes thread archive and unarchive commands", () =>
   Effect.gen(function* () {
     const archive = yield* decodeOrchestrationCommand({

@@ -7,6 +7,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type EnvironmentId,
+  type FallbackCombo,
   type MessageId,
   type ModelSelection,
   type OrchestrationThreadShell,
@@ -81,8 +82,9 @@ import {
   type DraftComposerFileAttachment,
 } from "../../lib/composerImages";
 import {
+  buildConnectionModelOptions,
   buildModelOptions,
-  groupByProvider,
+  groupByLogicalModel,
   isModelSelectionUnavailable,
 } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -104,6 +106,10 @@ import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
 } from "./ThreadSettingsSheet";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { threadEnvironment } from "../../state/threads";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
 import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
@@ -532,12 +538,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => buildModelOptions(props.serverConfig, currentModelSelection),
     [props.serverConfig, currentModelSelection],
   );
-  const providerGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   // An existing thread is bound to its harness: sessions can't move between
-  // provider instances, so the picker only offers the thread's own group.
+  // provider instances, so the picker only offers pairings on the thread's
+  // own instance — including the ones a linked model backend connection
+  // serves — grouped model-first.
+  const threadModelOptions = useMemo(
+    () => [
+      ...modelOptions.filter((option) => option.providerKey === currentModelSelection.instanceId),
+      ...buildConnectionModelOptions(props.serverConfig).filter(
+        (option) => option.providerKey === currentModelSelection.instanceId,
+      ),
+    ],
+    [modelOptions, props.serverConfig, currentModelSelection.instanceId],
+  );
   const threadProviderGroups = useMemo(
-    () => providerGroups.filter((group) => group.providerKey === currentModelSelection.instanceId),
-    [providerGroups, currentModelSelection.instanceId],
+    () => groupByLogicalModel(threadModelOptions),
+    [threadModelOptions],
   );
   const currentModelOption =
     modelOptions.find(
@@ -554,6 +570,31 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [currentModelOption?.capabilities, currentModelSelection.options],
   );
   const settingsOwnerId = composerOwnerKey;
+  // Fallback combo edits persist through the existing `thread.meta.update`
+  // path (`combo: null` clears back to the manual `ModelSelection`), exactly
+  // like web's `onComboChange` in `ChatView.tsx`. The sheet stages the combo
+  // and only calls this on Save.
+  const updateThreadComboMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const onSelectCombo = useCallback(
+    (combo: FallbackCombo | null) => {
+      const threadId = props.selectedThread.id;
+      const environmentId = props.environmentId;
+      void updateThreadComboMetadata({ environmentId, input: { threadId, combo } }).then(
+        (result) => {
+          if (AsyncResult.isFailure(result)) {
+            const error = Cause.squash(result.cause);
+            Alert.alert(
+              "Could not update fallback combo",
+              error instanceof Error ? error.message : "The fallback combo could not be saved.",
+            );
+          }
+        },
+      );
+    },
+    [props.environmentId, props.selectedThread.id, updateThreadComboMetadata],
+  );
   const settingsRouteSession = useMemo<ExistingThreadSettingsRouteSession>(
     () => ({
       ownerId: settingsOwnerId,
@@ -562,6 +603,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerGroups: threadProviderGroups,
       selectedModel: currentModelSelection,
       onSelectModel: (option) => props.onUpdateModelSelection(option.selection),
+      combo: props.selectedThread.combo ?? null,
+      onSelectCombo,
       optionDescriptors: providerOptionDescriptors,
       onUpdateOptionSelections: (options) =>
         props.onUpdateModelSelection({ ...currentModelSelection, options }),
@@ -573,6 +616,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       currentRuntimeMode,
       props.onUpdateModelSelection,
       props.onUpdateRuntimeMode,
+      props.selectedThread.combo,
+      onSelectCombo,
       providerOptionDescriptors,
       settingsOwnerId,
       threadProviderGroups,

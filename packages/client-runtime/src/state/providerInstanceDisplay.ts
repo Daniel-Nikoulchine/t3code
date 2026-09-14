@@ -8,6 +8,7 @@
 import {
   defaultInstanceIdForDriver,
   PROVIDER_DISPLAY_NAMES,
+  type ModelBackendKind,
   type ProviderDriverKind,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -61,6 +62,31 @@ export function providerInstanceInitials(label: string): string {
     .slice(0, 2)
     .map((word) => Array.from(word)[0]?.toUpperCase() ?? "")
     .join("");
+}
+
+const MODEL_BACKEND_KIND_LABELS: Record<ModelBackendKind, string> = {
+  native: "Native",
+  "openai-compatible": "OpenAI-compatible",
+  "t3-router": "Built-in routing",
+};
+
+/**
+ * Resolve the backend label for a provider snapshot's model backend: the
+ * backend's `displayName` when set, otherwise the kind label. Returns
+ * `undefined` for native/direct connections (absent backend or
+ * `viaProxy !== true`) — the same rule as `isProviderProxied` in contracts'
+ * `server.ts`, so pickers only badge instances that actually route through
+ * an external proxy. Never surfaces key material: snapshots carry only the
+ * backend kind/displayName, never URLs with credentials or secret values.
+ */
+export function resolveProviderBackendLabel(
+  snapshot: Pick<ServerProvider, "backend"> | undefined,
+): string | undefined {
+  const backend = snapshot?.backend;
+  if (backend?.viaProxy !== true) return undefined;
+  const trimmedDisplayName = backend.displayName?.trim();
+  if (trimmedDisplayName) return trimmedDisplayName;
+  return MODEL_BACKEND_KIND_LABELS[backend.kind];
 }
 
 /** Only `#rrggbb` accent colors render; anything else is treated as unset. */

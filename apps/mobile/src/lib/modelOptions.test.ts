@@ -3,8 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderInstanceId, type ModelSelection, type ServerConfig } from "@t3tools/contracts";
 
 import {
+  buildConnectionModelOptions,
+  buildModelGroups,
   buildModelOptions,
-  groupByProvider,
+  groupByLogicalModel,
   isModelSelectionUnavailable,
   resolveDefaultableModelSelection,
   resolveNewTaskModelSelection,
@@ -38,7 +40,7 @@ describe("mobile model options", () => {
     expect(buildModelOptions(config, null)[0]?.providerLabel).toBe("Hermes");
   });
 
-  it("groups models by provider and flags legacy entries", () => {
+  it("groups model-first and flags legacy pairings", () => {
     const config = {
       providers: [
         {
@@ -67,15 +69,41 @@ describe("mobile model options", () => {
       ],
     } as unknown as ServerConfig;
 
-    expect(groupByProvider(buildModelOptions(config, null))).toMatchObject([
+    expect(groupByLogicalModel(buildModelOptions(config, null))).toMatchObject([
       {
-        providerKey: "codex",
-        providerLabel: "Codex",
-        models: [
-          { key: "codex:gpt-5.6-sol", label: "GPT-5.6 Sol", subtitle: "", isLegacy: false },
-          { key: "codex:gpt-5.4", label: "GPT-5.4", isLegacy: true },
-        ],
+        key: "gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        models: [{ key: "codex:gpt-5.6-sol", label: "GPT-5.6 Sol", subtitle: "", isLegacy: false }],
       },
+      {
+        key: "gpt-5.4",
+        label: "GPT-5.4",
+        models: [{ key: "codex:gpt-5.4", isLegacy: true }],
+      },
+    ]);
+  });
+
+  it("pools same-slug pairings from several instances into one logical model", () => {
+    const pairing = (instanceId: string, displayName: string) => ({
+      instanceId,
+      driver: "codex",
+      displayName,
+      enabled: true,
+      installed: true,
+      auth: { status: "authenticated" },
+      models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null }],
+    });
+    const config = {
+      providers: [pairing("codex", "Codex"), pairing("codex_personal", "Codex Personal")],
+    } as unknown as ServerConfig;
+
+    const groups = groupByLogicalModel(buildModelOptions(config, null));
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ key: "gpt-5.6-sol", label: "GPT-5.6 Sol" });
+    expect(groups[0]?.models.map((model) => model.providerKey)).toEqual([
+      "codex",
+      "codex_personal",
     ]);
   });
 
@@ -123,9 +151,13 @@ describe("mobile model options", () => {
         },
       })),
     );
-    expect(groupByProvider(options)).toEqual([
-      { providerKey: "opencode_work", providerLabel: "OpenCode Work", models: options },
-    ]);
+    expect(groupByLogicalModel(options)).toEqual(
+      sources.map((source) => ({
+        key: `${source.id}/claude-fable-5`,
+        label: "Claude Fable 5",
+        models: [options.find((option) => option.subtitle === source.label)],
+      })),
+    );
   });
 
   it("does not materialize catalog defaults for missing stored options", () => {
@@ -432,5 +464,186 @@ describe("mobile model options", () => {
         modelOptions: [unavailable],
       }),
     ).toBeNull();
+  });
+
+  describe("backend routing flags", () => {
+    const proxiedConfig = (backend: Record<string, unknown>) =>
+      ({
+        providers: [
+          {
+            instanceId: "opencode_proxy",
+            driver: "opencode",
+            displayName: "OpenCode Proxy",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            backend,
+            models: [
+              {
+                slug: "gpt-5.4",
+                name: "GPT-5.4",
+                isCustom: false,
+                capabilities: null,
+              },
+            ],
+          },
+        ],
+      }) as unknown as ServerConfig;
+
+    it("flags models of a proxied instance and carries the backend label", () => {
+      const config = proxiedConfig({
+        kind: "openai-compatible",
+        displayName: "OmniRoute",
+        viaProxy: true,
+      });
+
+      expect(buildModelOptions(config, null)).toMatchObject([
+        { viaProxy: true, backendLabel: "OmniRoute" },
+      ]);
+      expect(buildModelOptions(config, null)[0]?.capabilitiesDegraded).toBeUndefined();
+      const [group] = groupByLogicalModel(buildModelOptions(config, null));
+      expect(group?.models[0]).toMatchObject({ viaProxy: true, backendLabel: "OmniRoute" });
+      expect(group?.models[0]?.capabilitiesDegraded).toBeUndefined();
+    });
+
+    it("falls back to the kind label without a backend display name", () => {
+      const config = proxiedConfig({ kind: "openai-compatible", viaProxy: true });
+
+      expect(buildModelOptions(config, null)[0]?.backendLabel).toBe("OpenAI-compatible");
+    });
+
+    it("marks degraded capabilities on proxied models", () => {
+      const config = proxiedConfig({
+        kind: "openai-compatible",
+        viaProxy: true,
+        capabilitiesDegraded: true,
+      });
+
+      expect(buildModelOptions(config, null)).toMatchObject([
+        { viaProxy: true, capabilitiesDegraded: true },
+      ]);
+      expect(
+        groupByLogicalModel(buildModelOptions(config, null))[0]?.models[0]?.capabilitiesDegraded,
+      ).toBe(true);
+    });
+
+    it("leaves native instances unflagged", () => {
+      const config = {
+        providers: [
+          {
+            instanceId: "codex",
+            driver: "codex",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            backend: { kind: "native", viaProxy: false },
+            models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false }],
+          },
+        ],
+      } as unknown as ServerConfig;
+
+      const [option] = buildModelOptions(config, null);
+      expect(option?.viaProxy).toBeUndefined();
+      expect(option?.backendLabel).toBeUndefined();
+      expect(option?.capabilitiesDegraded).toBeUndefined();
+      const [group] = groupByLogicalModel(buildModelOptions(config, null));
+      expect(group?.models[0]?.viaProxy).toBeUndefined();
+      expect(group?.models[0]?.backendLabel).toBeUndefined();
+    });
+  });
+
+  describe("model-first pooling with connection pairings", () => {
+    const baseConfig = (
+      providerInstances: Record<string, unknown>,
+      connections: Record<string, unknown>,
+    ) =>
+      ({
+        providers: [
+          {
+            instanceId: "codex",
+            driver: "codex",
+            displayName: "Codex",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            models: [
+              { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null },
+            ],
+          },
+          {
+            instanceId: "codex_personal",
+            driver: "codex",
+            displayName: "Codex Personal",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            models: [
+              { slug: "gpt-5.6-sol", name: "GPT-5.6 Sol", isCustom: false, capabilities: null },
+            ],
+          },
+          {
+            instanceId: "opencode_proxy",
+            driver: "opencode",
+            displayName: "OpenCode Proxy",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            models: [],
+          },
+        ],
+        settings: {
+          providerInstances,
+          modelBackendConnections: connections,
+        },
+      }) as unknown as ServerConfig;
+    const linkedConfig = baseConfig(
+      { opencode_proxy: { driver: "opencode", connectionId: "conn1" } },
+      { conn1: { baseUrl: "https://example.invalid/v1", models: ["gpt-5.6-sol"] } },
+    );
+
+    it("pools snapshot pairings and adds the connection-provided one", () => {
+      const groups = buildModelGroups(linkedConfig, null);
+      const pooled = groups.find((group) => group.key === "gpt-5.6-sol");
+
+      expect(pooled?.label).toBe("GPT-5.6 Sol");
+      expect(pooled?.models.map((model) => model.providerKey)).toEqual([
+        "codex",
+        "codex_personal",
+        "opencode_proxy",
+      ]);
+      expect(pooled?.models[2]).toMatchObject({
+        key: "opencode_proxy:gpt-5.6-sol",
+        providerLabel: "OpenCode Proxy",
+        providerDriver: "opencode",
+        capabilities: null,
+      });
+    });
+
+    it("dedupes a fallback selection that is also connection-provided", () => {
+      const fallback: ModelSelection = {
+        instanceId: ProviderInstanceId.make("opencode_proxy"),
+        model: "gpt-5.6-sol",
+      };
+
+      const groups = buildModelGroups(linkedConfig, fallback);
+      const pooled = groups.find((group) => group.key === "gpt-5.6-sol");
+
+      expect(pooled?.models).toHaveLength(3);
+      expect(pooled?.models.filter((model) => model.providerKey === "opencode_proxy")).toHaveLength(
+        1,
+      );
+    });
+
+    it("keeps connection pairings off instances that are not usable", () => {
+      const config = baseConfig(
+        { opencode_proxy: { driver: "opencode", connectionId: "conn1" } },
+        { conn1: { baseUrl: "https://example.invalid/v1", models: ["gpt-5.6-sol"] } },
+      );
+      (config.providers[2] as { auth: { status: string } }).auth = { status: "unauthenticated" };
+
+      expect(buildConnectionModelOptions(config)).toEqual([]);
+      const pooled = buildModelGroups(config, null).find((group) => group.key === "gpt-5.6-sol");
+      expect(pooled?.models.map((model) => model.providerKey)).toEqual(["codex", "codex_personal"]);
+    });
   });
 });

@@ -374,6 +374,44 @@ effectIt.layer(hermesAdapterTestLayer)("HermesAdapterLive", (it) => {
     }),
   );
 
+  it.effect("keeps stale model picks on the session default instead of failing set_model", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("hermes-stale-model");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "hermes-stale-model-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockHermesWrapper({
+          T3_ACP_HERMES: "1",
+          T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        }),
+      );
+      const adapter = yield* makeTestAdapter(wrapperPath);
+
+      // `gmi:...` is no longer advertised; the mock rejects unknown
+      // `session/set_model` ids like the real Hermes backend (401).
+      const session = yield* adapter.startSession({
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("hermes"),
+          model: "gmi:MiniMaxAI/MiniMax-M3",
+        },
+      });
+      assert.equal(session.model, "default");
+      yield* adapter.sendTurn({ threadId, input: "still works" });
+      yield* adapter.stopSession(threadId);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      assert.isFalse(
+        requests.some((request) => request.method === "session/set_model"),
+        "stale model id must not be sent to session/set_model",
+      );
+    }),
+  );
+
   it.effect("retains reasoning effort across model switches", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("hermes-reasoning-switch");

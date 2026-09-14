@@ -8,10 +8,14 @@ import * as Schema from "effect/Schema";
 
 import { CodexSettings } from "@t3tools/contracts";
 import {
+  CODEX_BACKEND_CONFIG_MARKER,
   CodexShadowHomeEntryConflictError,
   CodexShadowHomePathConflictError,
+  codexBackendWiresProvider,
   materializeCodexShadowHome,
+  mergeCodexBackendConfigToml,
   resolveCodexHomeLayout,
+  writeCodexBackendShadowConfig,
 } from "./CodexHomeLayout.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 const decodeCodexSettingsValue = Schema.decodeSync(CodexSettings);
@@ -311,5 +315,269 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
         );
       }),
     );
+
+    it.effect.skipIf(!symlinksSupported)(
+      "keeps a private config.toml when privateConfigToml is set",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
+          const shadowHome = path.join(shadowRoot, "shadow");
+          yield* writeTextFile(path.join(sharedHome, "config.toml"), 'model = "gpt-5-codex"\n');
+
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          yield* materializeCodexShadowHome(layout, { privateConfigToml: true });
+
+          const configLinkResult = yield* fileSystem
+            .readLink(path.join(shadowHome, "config.toml"))
+            .pipe(Effect.result);
+          expect(configLinkResult._tag).toBe("Failure");
+          const sessionsTarget = yield* fileSystem.readLink(path.join(shadowHome, "sessions"));
+          expect(sessionsTarget).toBe(path.join(sharedHome, "sessions"));
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
+      "restores the shared config.toml symlink over a generated backend file",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
+          const shadowHome = path.join(shadowRoot, "shadow");
+          yield* writeTextFile(path.join(sharedHome, "config.toml"), 'model = "gpt-5-codex"\n');
+
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          yield* materializeCodexShadowHome(layout, { privateConfigToml: true });
+          yield* writeCodexBackendShadowConfig(
+            layout,
+            {
+              kind: "openai-compatible",
+              baseUrl: "http://127.0.0.1:20128/v1",
+            },
+            { OPENAI_API_KEY: "secret" },
+          );
+          const generated = yield* fileSystem.readFileString(path.join(shadowHome, "config.toml"));
+          expect(generated.startsWith(CODEX_BACKEND_CONFIG_MARKER)).toBe(true);
+
+          // The reverse transition: without a backend the generated file is
+          // dropped and the shared symlink returns.
+          yield* materializeCodexShadowHome(layout);
+          const configTarget = yield* fileSystem.readLink(path.join(shadowHome, "config.toml"));
+          expect(configTarget).toBe(path.join(sharedHome, "config.toml"));
+        }),
+    );
+
+    it.effect.skipIf(!symlinksSupported)(
+      "leaves a user-owned private config.toml alone when no backend is wired",
+      () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
+          const shadowHome = path.join(shadowRoot, "shadow");
+          yield* writeTextFile(path.join(sharedHome, "config.toml"), 'model = "gpt-5-codex"\n');
+          yield* writeTextFile(path.join(shadowHome, "config.toml"), 'model = "local"\n');
+
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          const error = yield* materializeCodexShadowHome(layout).pipe(Effect.flip);
+          expect(error).toBeInstanceOf(CodexShadowHomeEntryConflictError);
+        }),
+    );
+  });
+
+  describe("mergeCodexBackendConfigToml", () => {
+    it("appends the provider block and selection to a user config", () => {
+      const merged = mergeCodexBackendConfigToml(
+        'model = "gpt-5-codex"\napproval_policy = "never"\n',
+        {
+          baseUrl: "http://127.0.0.1:20128/v1",
+          envKey: "OPENAI_API_KEY",
+        },
+      );
+      expect(merged).toContain('model = "gpt-5-codex"');
+      expect(merged).toContain('approval_policy = "never"');
+      expect(merged).toContain('model_provider = "t3_backend"');
+      expect(merged).toContain("[model_providers.t3_backend]");
+      expect(merged).toContain('base_url = "http://127.0.0.1:20128/v1"');
+      expect(merged).toContain('wire_api = "chat"');
+      expect(merged).toContain('env_key = "OPENAI_API_KEY"');
+    });
+
+    it("omits env_key when no key resolves", () => {
+      const merged = mergeCodexBackendConfigToml(undefined, {
+        baseUrl: "http://127.0.0.1:20128/v1",
+      });
+      expect(merged).not.toContain("env_key");
+      expect(merged).toContain("[model_providers.t3_backend]");
+    });
+
+    it("replaces an existing top-level model_provider selection in place", () => {
+      const merged = mergeCodexBackendConfigToml(
+        [
+          'model = "gpt-5-codex"',
+          'model_provider = "oss"',
+          "",
+          "[profiles.fast]",
+          'model = "gpt-5"',
+        ].join("\n"),
+        { baseUrl: "http://127.0.0.1:20128/v1" },
+      );
+      expect(merged).toContain('model_provider = "t3_backend"');
+      expect(merged).not.toContain('model_provider = "oss"');
+      // Content after the first header belongs to other tables and is kept.
+      expect(merged).toContain("[profiles.fast]");
+      expect(merged.match(/model_provider\s*=/g)).toHaveLength(1);
+    });
+
+    it("replaces an existing t3_backend section instead of duplicating it", () => {
+      const first = mergeCodexBackendConfigToml(undefined, {
+        baseUrl: "http://old:1/v1",
+        envKey: "OPENAI_API_KEY",
+      });
+      const second = mergeCodexBackendConfigToml(first, { baseUrl: "http://new:2/v1" });
+      expect(second).not.toContain("http://old:1/v1");
+      expect(second.match(/\[model_providers\.t3_backend\]/g)).toHaveLength(1);
+      expect(second).toContain('base_url = "http://new:2/v1"');
+    });
+
+    it("drops a hand-written inline t3_backend entry under [model_providers]", () => {
+      const merged = mergeCodexBackendConfigToml(
+        [
+          "[model_providers]",
+          'oss = { base_url = "http://localhost:11434/v1" }',
+          't3_backend = { base_url = "http://stale/v1" }',
+        ].join("\n"),
+        { baseUrl: "http://127.0.0.1:20128/v1" },
+      );
+      expect(merged).not.toContain("http://stale/v1");
+      expect(merged).toContain('oss = { base_url = "http://localhost:11434/v1" }');
+      expect(merged.match(/t3_backend/g)).toHaveLength(2); // selection key + section header
+    });
+  });
+
+  describe("writeCodexBackendShadowConfig", () => {
+    const makeLayouts = Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+      const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
+      const shadowHome = path.join(shadowRoot, "shadow");
+      const authOverlay = yield* resolveCodexHomeLayout(
+        decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+      );
+      const direct = yield* resolveCodexHomeLayout(decodeCodexSettings({ homePath: sharedHome }));
+      return { path, sharedHome, shadowHome, authOverlay, direct };
+    });
+
+    const backendWithKey = {
+      kind: "openai-compatible" as const,
+      baseUrl: "http://127.0.0.1:20128/v1",
+    };
+
+    it.effect("writes a private merged config into the shadow home", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { path, sharedHome, shadowHome, authOverlay } = yield* makeLayouts;
+        yield* writeTextFile(path.join(sharedHome, "config.toml"), 'model = "gpt-5-codex"\n');
+        yield* fileSystem.makeDirectory(shadowHome, { recursive: true });
+
+        yield* writeCodexBackendShadowConfig(authOverlay, backendWithKey, {
+          OPENAI_API_KEY: "secret",
+        });
+
+        const sharedContents = yield* fileSystem.readFileString(
+          path.join(sharedHome, "config.toml"),
+        );
+        expect(sharedContents).toBe('model = "gpt-5-codex"\n');
+        const shadowContents = yield* fileSystem.readFileString(
+          path.join(shadowHome, "config.toml"),
+        );
+        expect(shadowContents.startsWith(CODEX_BACKEND_CONFIG_MARKER)).toBe(true);
+        expect(shadowContents).toContain('model = "gpt-5-codex"');
+        expect(shadowContents).toContain('model_provider = "t3_backend"');
+        expect(shadowContents).toContain('env_key = "OPENAI_API_KEY"');
+        expect(shadowContents).not.toContain("secret");
+      }),
+    );
+
+    it.effect("does nothing in direct mode", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { path, sharedHome, direct } = yield* makeLayouts;
+        yield* writeTextFile(path.join(sharedHome, "config.toml"), 'model = "gpt-5-codex"\n');
+
+        yield* writeCodexBackendShadowConfig(direct, backendWithKey, { OPENAI_API_KEY: "secret" });
+
+        const sharedContents = yield* fileSystem.readFileString(
+          path.join(sharedHome, "config.toml"),
+        );
+        expect(sharedContents).toBe('model = "gpt-5-codex"\n');
+        expect(yield* fileSystem.exists(path.join(sharedHome, "config.toml"))).toBe(true);
+      }),
+    );
+
+    it.effect("does nothing for backends that cannot serve the OpenAI wire", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { path, shadowHome, authOverlay } = yield* makeLayouts;
+        yield* fileSystem.makeDirectory(shadowHome, { recursive: true });
+
+        yield* writeCodexBackendShadowConfig(
+          authOverlay,
+          {
+            kind: "openai-compatible",
+            baseUrl: "http://127.0.0.1:20128/v1",
+            protocols: ["anthropic"],
+          },
+          {},
+        );
+
+        expect(yield* fileSystem.exists(path.join(shadowHome, "config.toml"))).toBe(false);
+      }),
+    );
+
+    it.effect("does nothing without a backend", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { path, shadowHome, authOverlay } = yield* makeLayouts;
+        yield* fileSystem.makeDirectory(shadowHome, { recursive: true });
+
+        yield* writeCodexBackendShadowConfig(authOverlay, undefined, {});
+
+        expect(yield* fileSystem.exists(path.join(shadowHome, "config.toml"))).toBe(false);
+      }),
+    );
+  });
+
+  describe("codexBackendWiresProvider", () => {
+    const wiredBackend = {
+      kind: "openai-compatible" as const,
+      baseUrl: "http://127.0.0.1:20128/v1",
+    };
+
+    it("wires openai-compatible backends with a base url", () => {
+      expect(codexBackendWiresProvider(wiredBackend)).toBe(true);
+      expect(codexBackendWiresProvider(undefined)).toBe(false);
+      expect(codexBackendWiresProvider({ kind: "native" })).toBe(false);
+      expect(
+        codexBackendWiresProvider({
+          kind: "openai-compatible",
+          baseUrl: "http://127.0.0.1:20128/v1",
+          protocols: ["anthropic"],
+        }),
+      ).toBe(false);
+    });
   });
 });

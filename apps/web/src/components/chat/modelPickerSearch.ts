@@ -17,6 +17,22 @@ type ModelPickerSearchableModel = {
 
 const MODEL_PICKER_FAVORITE_SCORE_BOOST = 24;
 
+/**
+ * Scope the search pool to the sidebar-selected provider. When the user has
+ * picked a concrete instance in the model picker sidebar, searching only
+ * matches models of that instance's driver kind — selecting Cline and
+ * typing a model name must not surface Codex/Grok/… models. `null` keeps
+ * the full pool (favorites tab, which is cross-provider by design).
+ */
+export function scopeModelPickerSearchToDriverKind<
+  T extends Pick<ModelPickerSearchableModel, "driverKind">,
+>(models: ReadonlyArray<T>, selectedDriverKind: string | null): ReadonlyArray<T> {
+  if (selectedDriverKind === null) {
+    return models;
+  }
+  return models.filter((model) => model.driverKind === selectedDriverKind);
+}
+
 function getModelPickerSearchFields(model: ModelPickerSearchableModel): string[] {
   return [
     normalizeSearchQuery(model.name),

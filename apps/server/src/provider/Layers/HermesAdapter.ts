@@ -66,9 +66,10 @@ import {
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import {
+  advertisedHermesModelIds,
   applyHermesAcpModelSelection,
   makeHermesAcpRuntime,
-  resolveHermesModelId,
+  resolveHermesSessionModelId,
 } from "../acp/HermesAcpSupport.ts";
 import { type HermesAdapterShape } from "../Services/HermesAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -145,6 +146,14 @@ interface HermesSessionContext {
    */
   appliedModel: string | undefined;
   appliedReasoningEffort: string | undefined;
+  /**
+   * Model ids Hermes advertised for this session (`availableModels` plus
+   * `currentModelId`). Selections are resolved against it before
+   * `session/set_model` so stale or cross-provider ids fall back to the
+   * session model instead of failing every turn with `401 ... not supported`.
+   * `undefined` when Hermes reported no catalog (legacy pass-through).
+   */
+  readonly advertisedModels: ReadonlySet<string> | undefined;
 }
 
 function settlePendingApprovalsAsCancelled(
@@ -228,16 +237,19 @@ function applyRequestedSessionConfiguration<E>(input: {
         readonly model: string;
       }
     | undefined;
+  readonly advertisedModels?: ReadonlySet<string> | undefined;
   readonly mapError: (context: {
     readonly cause: import("effect-acp/errors").AcpError;
     readonly method: "session/set_config_option" | "session/set_mode";
   }) => E;
-}): Effect.Effect<void, E> {
+}): Effect.Effect<string | undefined, E> {
   return Effect.gen(function* () {
+    let appliedModel: string | undefined;
     if (input.modelSelection) {
-      yield* applyHermesAcpModelSelection({
+      appliedModel = yield* applyHermesAcpModelSelection({
         runtime: input.runtime,
         model: input.modelSelection.model,
+        advertisedModels: input.advertisedModels,
         mapError: (cause) =>
           input.mapError({
             cause,
@@ -256,6 +268,7 @@ function applyRequestedSessionConfiguration<E>(input: {
         }),
       ),
     );
+    return appliedModel;
   });
 }
 
@@ -660,10 +673,16 @@ export function makeHermesAdapter(
             ),
           );
 
-          yield* applyRequestedSessionConfiguration({
+          // Resolve the stored selection against the live catalog before
+          // `session/set_model`: stale (`gmi:...`) or cross-provider
+          // (`opencode/...`) ids stay on the session model instead of
+          // failing the session start with `401 ... not supported`.
+          const advertisedModels = advertisedHermesModelIds(started.sessionSetupResult.models);
+          const appliedModelId = yield* applyRequestedSessionConfiguration({
             runtime: acp,
             runtimeMode: input.runtimeMode,
             modelSelection: hermesModelSelection,
+            advertisedModels,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -675,16 +694,16 @@ export function makeHermesAdapter(
           });
 
           const now = yield* nowIso;
-          const configuredModel = resolveHermesModelId(hermesModelSelection?.model);
           const currentModel =
             started.sessionSetupResult.models?.currentModelId.trim() || undefined;
+          const sessionModel = appliedModelId ?? currentModel ?? "default";
           const session: ProviderSession = {
             provider: PROVIDER,
             providerInstanceId: boundInstanceId,
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            model: configuredModel ?? currentModel ?? "default",
+            model: sessionModel,
             threadId: input.threadId,
             resumeCursor: {
               schemaVersion: HERMES_RESUME_VERSION,
@@ -713,8 +732,9 @@ export function makeHermesAdapter(
             // Seed with the resolved session model (same fallback chain as
             // `session.model` above) so the first sendTurn without an explicit
             // selection compares equal and skips a redundant `set_mode` RPC.
-            appliedModel: configuredModel ?? currentModel ?? "default",
+            appliedModel: sessionModel,
             appliedReasoningEffort: getHermesReasoningEffort(hermesModelSelection),
+            advertisedModels,
           };
 
           const nf = yield* Stream.runDrain(
@@ -1040,16 +1060,21 @@ export function makeHermesAdapter(
           const turnModelSelection =
             input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
           const model = turnModelSelection?.model ?? ctx.session.model;
-          const resolvedModel = resolveHermesModelId(model) ?? ctx.session.model ?? "default";
+          const resolvedModel =
+            resolveHermesSessionModelId(model, ctx.advertisedModels) ??
+            ctx.session.model ??
+            "default";
           // Hermes reruns provider resolution on every `session/set_model`,
           // and its model-name detection can override an explicit
           // `provider:model` pick (e.g. `gmi:MiniMaxAI/MiniMax-M3` silently
           // rerouted to NVIDIA NIM because NIM's static catalog lists the
           // bare name). Only send the RPC when the selection actually
           // changed, so an unchanged per-turn selection cannot reroute the
-          // session's already-applied provider.
+          // session's already-applied provider. Unknown ids resolve to the
+          // session model above, so a stale pick can neither reroute nor
+          // fail the turn with `401 ... not supported`.
           if (ctx.appliedModel !== resolvedModel) {
-            yield* applyRequestedSessionConfiguration({
+            const appliedModelId = yield* applyRequestedSessionConfiguration({
               runtime: ctx.acp,
               runtimeMode: ctx.session.runtimeMode,
               modelSelection:
@@ -1058,10 +1083,11 @@ export function makeHermesAdapter(
                   : {
                       model,
                     },
+              advertisedModels: ctx.advertisedModels,
               mapError: ({ cause, method }) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
             });
-            ctx.appliedModel = resolvedModel;
+            ctx.appliedModel = appliedModelId ?? resolvedModel;
           }
           const requestedReasoningEffort = getHermesReasoningEffort(turnModelSelection);
           if (

@@ -3400,6 +3400,44 @@ describe("ProviderRuntimeIngestion", () => {
     expect(activityPayload?.message).toBe("runtime activity exploded");
   });
 
+  it("records model.rerouted activities with fromModel/toModel/reason and turnId", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.emitAndDrain([
+      {
+        type: "model.rerouted",
+        eventId: asEventId("evt-model-rerouted"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-rerouted"),
+        payload: {
+          fromModel: "gpt-5-codex",
+          toModel: "gpt-5-codex-mini",
+          reason: "rate limited, falling back",
+        },
+      },
+    ]);
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === "thread-1");
+    const activity = thread?.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-model-rerouted",
+    );
+    const activityPayload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(activity?.kind).toBe("model.rerouted");
+    expect(activity?.turnId).toBe("turn-rerouted");
+    expect(activityPayload).toMatchObject({
+      fromModel: "gpt-5-codex",
+      toModel: "gpt-5-codex-mini",
+      reason: "rate limited, falling back",
+    });
+  });
+
   it("keeps the session running when a runtime.warning arrives during an active turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

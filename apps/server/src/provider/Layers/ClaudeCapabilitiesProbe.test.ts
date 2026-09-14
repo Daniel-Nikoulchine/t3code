@@ -52,6 +52,22 @@ it("isolates Claude capability probes without dropping workspace setting sources
   assert.equal(options.env?.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, "1");
 });
 
+it("passes model backend endpoint variables through to the SDK session", () => {
+  // The driver merges the backend overlay into the environment it hands the
+  // probe; the probe must keep the pair so the CLI reaches the endpoint.
+  const options = buildClaudeCapabilitiesProbeQueryOptions({
+    executablePath: "/usr/bin/claude",
+    abortController: new AbortController(),
+    environment: {
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:20128/v1",
+      ANTHROPIC_API_KEY: "secret",
+    },
+    cwd: undefined,
+  });
+  assert.equal(options.env?.ANTHROPIC_BASE_URL, "http://127.0.0.1:20128/v1");
+  assert.equal(options.env?.ANTHROPIC_API_KEY, "secret");
+});
+
 it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
   it.effect("serializes strict no-MCP options and still resolves account capabilities", () =>
     Effect.gen(function* () {

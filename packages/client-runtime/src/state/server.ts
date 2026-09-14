@@ -1098,6 +1098,16 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    /**
+     * On-demand probe of a (possibly unpersisted) backend config. No
+     * scheduler/concurrency lane: probes are rare, user-initiated, and keyed
+     * to the edited values — the button disables itself while one is in
+     * flight. Results stay local to the caller, never in shared state.
+     */
+    testModelBackend: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:test-model-backend",
+      tag: WS_METHODS.serverTestModelBackend,
+    }),
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,

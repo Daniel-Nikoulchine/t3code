@@ -42,7 +42,7 @@ interface HermesSkillScanBudget {
   incomplete: boolean;
 }
 
-class HermesSkillsProbeError extends Schema.TaggedErrorClass<HermesSkillsProbeError>()(
+class HermesSkillsProbeError extends Schema.TaggedError<HermesSkillsProbeError>()(
   "HermesSkillsProbeError",
   {
     reason: Schema.Literals(["scan-budget-exhausted", "filesystem-error"]),

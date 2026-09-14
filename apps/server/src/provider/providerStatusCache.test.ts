@@ -297,4 +297,38 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       fallbackCodex,
     );
   });
+
+  it.effect("never persists the volatile verification marker", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-verify-" });
+      const verified = makeProvider(CODEX_DRIVER, {
+        backendLastVerifiedAt: "2026-09-13T00:00:00.000Z",
+      });
+      const cachePath = yield* resolveProviderStatusCachePath({
+        cacheDir: tempDir,
+        instanceId: verified.instanceId,
+      });
+
+      yield* writeProviderStatusCache({ filePath: cachePath, provider: verified });
+
+      const reread = yield* readProviderStatusCache(cachePath);
+      assert.strictEqual(reread?.backendLastVerifiedAt, undefined);
+    }),
+  );
+
+  it("never resurrects a cached verification marker", () => {
+    const cachedCodex = makeProvider(CODEX_DRIVER, {
+      backendLastVerifiedAt: "2026-09-12T00:00:00.000Z",
+    });
+    const fallbackCodex = makeProvider(CODEX_DRIVER);
+
+    assert.strictEqual(
+      hydrateCachedProvider({
+        cachedProvider: cachedCodex,
+        fallbackProvider: fallbackCodex,
+      }).backendLastVerifiedAt,
+      undefined,
+    );
+  });
 });

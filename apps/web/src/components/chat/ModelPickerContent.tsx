@@ -4,21 +4,29 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import type { LogicalModel, LogicalModelSource } from "@t3tools/client-runtime/model-catalog";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { useAtomValue } from "@effect/atom-react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import { ChevronRightIcon, SearchIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, SearchIcon } from "lucide-react";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
 import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";
 import {
+  LOGICAL_LEGACY_SECTION_KEY,
   modelPickerLegacySectionKey,
+  modelPickerLogicalModelKey,
   modelPickerModelKey,
   parseModelPickerLegacySectionKey,
+  parseModelPickerLogicalModelKey,
   parseModelPickerModelKey,
 } from "./modelPickerKeys";
-import { buildModelPickerSearchText, scoreModelPickerSearch } from "./modelPickerSearch";
+import {
+  buildModelPickerSearchText,
+  scoreModelPickerSearch,
+  scopeModelPickerSearchToDriverKind,
+} from "./modelPickerSearch";
 import {
   Combobox,
   ComboboxEmpty,
@@ -26,7 +34,9 @@ import {
   ComboboxItem,
   ComboboxListVirtualized,
 } from "../ui/combobox";
-import { ModelEsque } from "./providerIconUtils";
+import { Kbd } from "../ui/kbd";
+import { Badge } from "../ui/badge";
+import { ModelEsque, PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import {
@@ -60,6 +70,10 @@ type ModelPickerItem = {
   continuationGroupKey?: string | undefined;
   isLegacy?: boolean | undefined;
   isUnavailable?: boolean | undefined;
+  /** Set when the owning instance routes through an external model backend. */
+  viaProxy?: boolean | undefined;
+  /** Set when that proxy degrades model capabilities. */
+  capabilitiesDegraded?: boolean | undefined;
 };
 
 export function resolveModelPickerSelectedModel(input: {
@@ -113,7 +127,224 @@ export function shouldOfferModelPickerSetup(
   );
 }
 
+/**
+ * Whether a harness option is disabled in the explicit harness selector.
+ * Mirrors `ModelPickerSidebar` so the dropdown and the icon rail never
+ * disagree: not-ready instances stay disabled unless their selected
+ * unavailable model is reachable, and locked threads disable other drivers.
+ */
+export function isModelPickerHarnessOptionDisabled(input: {
+  readonly entry: ProviderInstanceEntry;
+  readonly lockedDisabledInstanceIds?: ReadonlySet<ProviderInstanceId> | undefined;
+  readonly selectableUnavailableInstanceIds?: ReadonlySet<ProviderInstanceId> | undefined;
+}): boolean {
+  const isUnavailable = !isProviderInstancePickerReady(input.entry);
+  const isContextDisabled = input.lockedDisabledInstanceIds?.has(input.entry.instanceId) ?? false;
+  const unavailableSelectionIsReachable =
+    input.selectableUnavailableInstanceIds?.has(input.entry.instanceId) ?? false;
+  return (isUnavailable && !unavailableSelectionIsReachable) || isContextDisabled;
+}
+
 const EMPTY_MODEL_JUMP_LABELS = new Map<string, string>();
+
+/** One model-first picker row for a pooled logical model. */
+export interface LogicalModelPickerItem {
+  /** Logical model slug (`LogicalModel.modelId`). */
+  modelId: string;
+  displayName: string;
+  /** Concrete pairings that can serve the model here, in catalog order. */
+  sources: ReadonlyArray<LogicalModelSource>;
+  /** Every pairing is flagged legacy in the per-instance options. */
+  isLegacy: boolean;
+  /** The composer's current selection maps onto one of this model's sources. */
+  isActive: boolean;
+  /**
+   * Set only on the synthetic fallback item that keeps an active selection
+   * the catalog cannot see (unavailable row, stale catalog) selectable.
+   */
+  isActiveUnavailable?: boolean;
+}
+
+/**
+ * Projects the pooled catalog onto the model-first picker's rows. Sources on
+ * instances that are not picker-ready are dropped (the setup footer covers
+ * them), except the current selection's own pairing, which always stays
+ * reachable — when nothing maps to it, a synthetic single-source item is
+ * appended so the combobox value keeps a visible row.
+ */
+export function buildLogicalModelPickerItems(input: {
+  logicalModels: ReadonlyArray<LogicalModel>;
+  modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  activeInstanceId: ProviderInstanceId;
+  activeModel: string;
+  lockedProvider?: ProviderDriverKind | null;
+  lockedContinuationGroupKey?: string | null;
+}): ReadonlyArray<LogicalModelPickerItem> {
+  const entryByInstanceId = new Map(
+    input.instanceEntries.map((entry) => [entry.instanceId, entry] as const),
+  );
+  const isVisibleInstance = (instanceId: ProviderInstanceId): boolean => {
+    const entry = entryByInstanceId.get(instanceId);
+    if (!entry || !isProviderInstancePickerReady(entry)) {
+      return false;
+    }
+    if (input.lockedProvider != null) {
+      if (entry.driverKind !== input.lockedProvider) return false;
+      if (
+        input.lockedContinuationGroupKey &&
+        entry.continuationGroupKey !== input.lockedContinuationGroupKey
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const optionFor = (instanceId: ProviderInstanceId, model: string): ModelEsque | undefined =>
+    input.modelOptionsByInstance.get(instanceId)?.find((option) => option.slug === model);
+
+  const items: LogicalModelPickerItem[] = [];
+  let hasActiveItem = false;
+  for (const logical of input.logicalModels) {
+    const activeSources = logical.sources.filter(
+      (source) =>
+        source.instanceId === input.activeInstanceId && source.model === input.activeModel,
+    );
+    const sources = logical.sources.filter((source) =>
+      isVisibleInstance(source.instanceId as ProviderInstanceId),
+    );
+    if (sources.length === 0 && activeSources.length === 0) {
+      continue;
+    }
+    // The current selection stays reachable even when its instance is not
+    // picker-ready — the highlight must not disappear while the picker is open.
+    const visibleSources = activeSources.some((source) => !sources.includes(source))
+      ? [...sources, ...activeSources.filter((source) => !sources.includes(source))]
+      : sources;
+    if (activeSources.length > 0) {
+      hasActiveItem = true;
+    }
+    items.push({
+      modelId: logical.modelId,
+      displayName: logical.displayName,
+      sources: visibleSources,
+      isLegacy:
+        visibleSources.length > 0 &&
+        visibleSources.every(
+          (source) =>
+            optionFor(source.instanceId as ProviderInstanceId, source.model)?.isLegacy === true,
+        ),
+      isActive: activeSources.length > 0,
+    });
+  }
+
+  if (input.activeModel && !hasActiveItem) {
+    const option = optionFor(input.activeInstanceId, input.activeModel);
+    items.push({
+      modelId: input.activeModel,
+      displayName: option?.name ?? input.activeModel,
+      sources: [
+        {
+          instanceId: input.activeInstanceId,
+          model: input.activeModel,
+          via: "native",
+          authMode: "unknown",
+        },
+      ],
+      isLegacy: option?.isLegacy === true,
+      isActive: true,
+      ...(option?.isUnavailable === true ? { isActiveUnavailable: true } : {}),
+    });
+  }
+
+  return items;
+}
+
+/** One model-first picker row: a logical model, one of its source pairings, or the legacy section header. */
+type ModelFirstRow =
+  | { readonly kind: "logical"; readonly key: string; readonly item: LogicalModelPickerItem }
+  | {
+      readonly kind: "source";
+      readonly key: string;
+      readonly item: LogicalModelPickerItem;
+      readonly source: LogicalModelSource;
+    }
+  | { readonly kind: "legacy-header"; readonly key: string; readonly count: number };
+
+/**
+ * A logical model row commits directly when exactly one instance can serve
+ * the model; otherwise it expands in place to the instance sub-pick rows.
+ */
+function LogicalModelRow(props: {
+  index: number;
+  item: LogicalModelPickerItem;
+  expanded: boolean;
+  /** Resolved single serving instance; undefined for multi-source rows. */
+  singleSourceEntry: ProviderInstanceEntry | undefined;
+  jumpLabel?: string | null;
+}) {
+  const multiSource = props.item.sources.length > 1;
+  const ProviderIcon = props.singleSourceEntry
+    ? (PROVIDER_ICON_BY_PROVIDER[props.singleSourceEntry.driverKind] ?? null)
+    : null;
+  const singleSource = multiSource ? undefined : props.item.sources[0];
+  return (
+    <ComboboxItem
+      hideIndicator
+      index={props.index}
+      value={modelPickerLogicalModelKey(props.item.modelId)}
+      contentClassName="flex w-full items-center gap-3"
+      className={cn(
+        "group w-full !min-w-0 max-w-full cursor-pointer rounded-md px-2 py-2 transition-[background-color,box-shadow,color]",
+        "hover:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] data-highlighted:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))] data-selected:bg-foreground/[0.08] data-selected:text-foreground data-selected:ring-0 [&[data-highlighted][data-selected]]:bg-[color-mix(in_srgb,var(--popover)_90%,var(--contrast-foreground))]",
+      )}
+    >
+      <div className="min-w-0 flex-1 text-left">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 truncate text-xs font-medium leading-snug">
+            {props.item.displayName}
+          </div>
+          {multiSource ? (
+            <Badge variant="outline" size="sm">
+              {props.item.sources.length} providers
+            </Badge>
+          ) : null}
+          {props.item.isActiveUnavailable ? (
+            <Badge variant="outline" size="sm">
+              Unavailable
+            </Badge>
+          ) : null}
+        </div>
+        {singleSource && props.singleSourceEntry ? (
+          <div className="mt-1 flex items-center gap-1.5">
+            {ProviderIcon ? <ProviderIcon className="size-3 shrink-0" /> : null}
+            <span className="truncate text-xs font-normal leading-snug text-muted-foreground/70">
+              {props.singleSourceEntry.displayName}
+            </span>
+            {singleSource.authMode === "subscription" ? (
+              <Badge variant="outline" size="sm">
+                Subscription
+              </Badge>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {props.jumpLabel ? (
+          <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">{props.jumpLabel}</Kbd>
+        ) : null}
+        {props.item.isActive ? (
+          <CheckIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : null}
+        {multiSource ? (
+          <ChevronRightIcon
+            className={cn("size-4 transition-transform", props.expanded && "rotate-90")}
+          />
+        ) : null}
+      </div>
+    </ComboboxItem>
+  );
+}
 
 function ModelListSeparator() {
   return <div className="h-0.5" />;
@@ -146,6 +377,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
    * model set but are free to diverge via customModels).
    */
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+  /**
+   * Pooled logical models from `deriveAppModelCatalog`. When set, the picker
+   * renders model-first: one row per logical model, expanding to the
+   * concrete instance pairings that can serve it. When omitted, the picker
+   * keeps the per-instance instance-scoped list (settings surfaces).
+   */
+  logicalModels?: ReadonlyArray<LogicalModel>;
   terminalOpen: boolean;
   onRequestClose?: () => void;
   onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
@@ -307,8 +545,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   // instance-keyed map; each model carries its instance id + driver kind
   // so the list row can render the right icon and display name without
   // another lookup.
+  const isModelFirst = props.logicalModels !== undefined;
   const flatModels = useMemo(() => {
     const out: ModelPickerItem[] = [];
+    if (isModelFirst) {
+      return out;
+    }
     for (const [instanceId, models] of modelOptionsByInstance) {
       const entry = entryByInstanceId.get(instanceId);
       if (!entry) {
@@ -335,6 +577,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           ...(model.badge ? { badge: model.badge } : {}),
           ...(model.isLegacy ? { isLegacy: true } : {}),
           ...(model.isUnavailable ? { isUnavailable: true } : {}),
+          ...(model.viaProxy ? { viaProxy: true as const } : {}),
+          ...(model.capabilitiesDegraded ? { capabilitiesDegraded: true as const } : {}),
           instanceId,
           driverKind: entry.driverKind,
           instanceDisplayName: entry.displayName,
@@ -346,10 +590,206 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       }
     }
     return out;
-  }, [modelOptionsByInstance, entryByInstanceId, props.activeInstanceId, activeModelSlug]);
+  }, [
+    isModelFirst,
+    modelOptionsByInstance,
+    entryByInstanceId,
+    props.activeInstanceId,
+    activeModelSlug,
+  ]);
+
+  const isSearching = searchQuery.trim().length > 0;
+
+  // ── Model-first list: logical models pooled across instances ───────
+  const logicalItems = useMemo(() => {
+    if (!isModelFirst) {
+      return [];
+    }
+    return buildLogicalModelPickerItems({
+      logicalModels: props.logicalModels ?? [],
+      modelOptionsByInstance,
+      instanceEntries,
+      activeInstanceId: props.activeInstanceId,
+      activeModel: activeModelSlug,
+      ...(props.lockedProvider !== null ? { lockedProvider: props.lockedProvider } : {}),
+      ...(props.lockedContinuationGroupKey
+        ? { lockedContinuationGroupKey: props.lockedContinuationGroupKey }
+        : {}),
+    });
+  }, [
+    activeModelSlug,
+    instanceEntries,
+    isModelFirst,
+    modelOptionsByInstance,
+    props.activeInstanceId,
+    props.logicalModels,
+    props.lockedContinuationGroupKey,
+    props.lockedProvider,
+  ]);
+  // Expansion defaults open for the active multi-source model so its concrete
+  // pairings are visible; a user's toggle inverts that until the picker closes.
+  const [logicalExpansionOverrides, setLogicalExpansionOverrides] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const [logicalLegacyExpanded, setLogicalLegacyExpanded] = useState(false);
+  const isLogicalModelExpanded = useCallback(
+    (item: LogicalModelPickerItem) => {
+      const defaultExpanded = item.isActive && item.sources.length > 1;
+      const hasOverride = logicalExpansionOverrides.has(item.modelId);
+      return defaultExpanded ? !hasOverride : hasOverride;
+    },
+    [logicalExpansionOverrides],
+  );
+  const toggleLogicalModelExpanded = useCallback((modelId: string) => {
+    setLogicalExpansionOverrides((current) => {
+      const next = new Set(current);
+      if (!next.delete(modelId)) {
+        next.add(modelId);
+      }
+      return next;
+    });
+  }, []);
+  const isFavoriteLogicalItem = useCallback(
+    (item: LogicalModelPickerItem) =>
+      item.sources.some((source) =>
+        favoritesSet.has(providerModelKey(source.instanceId as ProviderInstanceId, source.model)),
+      ),
+    [favoritesSet],
+  );
+  const searchedLogicalItems = useMemo(() => {
+    if (!isSearching) {
+      return null;
+    }
+    const rankedMatches = logicalItems
+      .map((item) => {
+        const searchable = {
+          name: item.displayName,
+          driverKind: item.sources
+            .map(
+              (source) =>
+                entryByInstanceId.get(source.instanceId as ProviderInstanceId)?.driverKind ?? "",
+            )
+            .join(" "),
+          providerDisplayName: item.sources
+            .map(
+              (source) =>
+                entryByInstanceId.get(source.instanceId as ProviderInstanceId)?.displayName ?? "",
+            )
+            .join(" "),
+          isFavorite: isFavoriteLogicalItem(item),
+        };
+        return {
+          item,
+          score: scoreModelPickerSearch(searchable, searchQuery),
+          isFavorite: searchable.isFavorite,
+          tieBreaker: buildModelPickerSearchText(searchable),
+        };
+      })
+      .filter(
+        (
+          ranked,
+        ): ranked is {
+          item: LogicalModelPickerItem;
+          score: number;
+          isFavorite: boolean;
+          tieBreaker: string;
+        } => ranked.score !== null,
+      );
+    return rankedMatches
+      .toSorted((a, b) => {
+        const scoreDelta = a.score - b.score;
+        if (scoreDelta !== 0) {
+          return scoreDelta;
+        }
+        if (a.isFavorite !== b.isFavorite) {
+          return a.isFavorite ? -1 : 1;
+        }
+        return a.tieBreaker.localeCompare(b.tieBreaker);
+      })
+      .map((ranked) => ranked.item);
+  }, [entryByInstanceId, isFavoriteLogicalItem, isSearching, logicalItems, searchQuery]);
+  const visibleLogicalItems = useMemo(() => {
+    if (searchedLogicalItems !== null) {
+      return searchedLogicalItems;
+    }
+    return logicalItems
+      .filter((item) => !item.isLegacy)
+      .toSorted((a, b) => {
+        const favoriteDelta = Number(isFavoriteLogicalItem(b)) - Number(isFavoriteLogicalItem(a));
+        if (favoriteDelta !== 0) {
+          return favoriteDelta;
+        }
+        return a.displayName.localeCompare(b.displayName);
+      });
+  }, [isFavoriteLogicalItem, logicalItems, searchedLogicalItems]);
+  const logicalLegacySection = useMemo(() => {
+    if (isSearching) {
+      return null;
+    }
+    const legacyItems = logicalItems.filter((item) => item.isLegacy);
+    if (legacyItems.length === 0) {
+      return null;
+    }
+    return { key: LOGICAL_LEGACY_SECTION_KEY, items: legacyItems };
+  }, [isSearching, logicalItems]);
+  const modelFirstRows = useMemo((): ReadonlyArray<ModelFirstRow> => {
+    const rows: ModelFirstRow[] = [];
+    const pushItem = (item: LogicalModelPickerItem) => {
+      rows.push({ kind: "logical", key: modelPickerLogicalModelKey(item.modelId), item });
+      if (isLogicalModelExpanded(item)) {
+        for (const source of item.sources) {
+          rows.push({
+            kind: "source",
+            key: modelPickerModelKey(source.instanceId as ProviderInstanceId, source.model),
+            item,
+            source,
+          });
+        }
+      }
+    };
+    for (const item of visibleLogicalItems) {
+      pushItem(item);
+    }
+    if (logicalLegacySection) {
+      // The header is a row so keys stay in render order even when expanded
+      // models interleave their source rows.
+      rows.push({
+        kind: "legacy-header",
+        key: logicalLegacySection.key,
+        count: logicalLegacySection.items.length,
+      });
+      if (logicalLegacyExpanded) {
+        for (const item of logicalLegacySection.items) {
+          pushItem(item);
+        }
+      }
+    }
+    return rows;
+  }, [isLogicalModelExpanded, logicalLegacyExpanded, logicalLegacySection, visibleLogicalItems]);
+  const modelFirstRowByKey = useMemo(
+    () => new Map(modelFirstRows.map((row) => [row.key, row] as const)),
+    [modelFirstRows],
+  );
+  const logicalItemById = useMemo(
+    () => new Map(logicalItems.map((item) => [item.modelId, item] as const)),
+    [logicalItems],
+  );
+  // Highlight follows the current selection: the logical row when its
+  // sub-pick is collapsed, the concrete pairing row when expanded.
+  const modelFirstActiveKey = useMemo(() => {
+    if (activeModelKey === null) {
+      return null;
+    }
+    const activeItem = logicalItems.find((item) => item.isActive);
+    if (!activeItem) {
+      return activeModelKey;
+    }
+    return isLogicalModelExpanded(activeItem)
+      ? activeModelKey
+      : modelPickerLogicalModelKey(activeItem.modelId);
+  }, [activeModelKey, isLogicalModelExpanded, logicalItems]);
 
   const isLocked = props.lockedProvider !== null;
-  const isSearching = searchQuery.trim().length > 0;
   const lockedDisabledInstanceIds = useMemo(() => {
     if (!isLocked) {
       return undefined;
@@ -378,7 +818,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return [...available, ...disabled];
   }, [instanceEntries, isLocked, matchesLockedProvider]);
-  const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  // The model-first list is flat by design — the instance rail would scope
+  // the pool back to one provider, defeating the pooling.
+  const showSidebar = !isModelFirst && !isSearching && sidebarInstanceEntries.length > 0;
   const instanceOrder = useMemo(
     () => instanceEntries.map((entry) => entry.instanceId),
     [instanceEntries],
@@ -390,7 +832,17 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
     // Apply tokenized fuzzy search across the combined provider/model search fields.
     if (searchQuery.trim()) {
-      const rankedMatches = result
+      // Outside locked mode the sidebar selection scopes the search pool to
+      // the selected instance's driver kind, so searching from a Cline rail
+      // item only matches Cline models. The favorites tab stays global.
+      const searchPool =
+        props.lockedProvider !== null || selectedInstanceId === "favorites"
+          ? result
+          : scopeModelPickerSearchToDriverKind(
+              result,
+              entryByInstanceId.get(selectedInstanceId)?.driverKind ?? null,
+            );
+      const rankedMatches = searchPool
         .map((model) => ({
           model,
           score: scoreModelPickerSearch(
@@ -424,9 +876,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           } => rankedModel.score !== null,
         );
 
-      // When searching, we only respect locked provider (by driver kind),
-      // ignoring sidebar selection so account-scoped searches can find a
-      // model before the user chooses a specific instance rail item.
+      // When searching, we only respect locked provider (by driver kind).
+      // The sidebar selection already scoped the pool above (except for the
+      // favorites tab), so account-scoped searches still find a model before
+      // the user chooses a specific instance rail item.
       if (props.lockedProvider !== null) {
         const lockedProviderMatches: Array<(typeof rankedMatches)[number]> = [];
         for (const rankedModel of rankedMatches) {
@@ -481,6 +934,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       instanceOrder: selectedInstanceId === "favorites" ? instanceOrder : [],
     });
   }, [
+    entryByInstanceId,
     favoritesSet,
     flatModels,
     instanceOrder,
@@ -528,9 +982,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               entry,
               modelOptionsByInstance.get(entry.instanceId) ?? [],
             ) &&
-            (selectedEntry
-              ? entry.instanceId === selectedEntry.instanceId
-              : filteredModels.length === 0),
+            (isModelFirst
+              ? modelFirstRows.length === 0
+              : selectedEntry
+                ? entry.instanceId === selectedEntry.instanceId
+                : filteredModels.length === 0),
         )
       : [];
 
@@ -570,6 +1026,43 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     [entryByInstanceId, getModelDisabledReason, modelOptionsByInstance, onInstanceModelChange],
   );
 
+  // A single-source logical model commits its one pairing directly; a
+  // multi-source one expands to the instance sub-pick instead.
+  const handleLogicalModelSelect = useCallback(
+    (item: LogicalModelPickerItem) => {
+      if (item.sources.length > 1) {
+        toggleLogicalModelExpanded(item.modelId);
+        return;
+      }
+      const source = item.sources[0];
+      if (!source) {
+        return;
+      }
+      const instanceId = source.instanceId as ProviderInstanceId;
+      if (getModelDisabledReason?.(instanceId, source.model)) {
+        return;
+      }
+      const entry = entryByInstanceId.get(instanceId);
+      const options = modelOptionsByInstance.get(instanceId);
+      if (!entry || !options) {
+        return;
+      }
+      // Same normalization as the per-instance rows: driver-kind scoped slug
+      // resolution against the instance's own option list.
+      const resolvedModel = resolveSelectableModel(entry.driverKind, source.model, options);
+      if (resolvedModel) {
+        onInstanceModelChange(instanceId, resolvedModel);
+      }
+    },
+    [
+      entryByInstanceId,
+      getModelDisabledReason,
+      modelOptionsByInstance,
+      onInstanceModelChange,
+      toggleLogicalModelExpanded,
+    ],
+  );
+
   const toggleFavorite = useCallback(
     (instanceId: ProviderInstanceId, model: string) => {
       const newFavorites = [...favorites];
@@ -590,6 +1083,32 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       NonNullable<ReturnType<typeof modelPickerJumpCommandForIndex>>
     >();
     let selectableModelIndex = 0;
+    if (isModelFirst) {
+      // Jump targets are the logical rows: single-source ones commit,
+      // multi-source ones expand to their sub-pick.
+      for (const row of modelFirstRows) {
+        if (row.kind !== "logical") {
+          continue;
+        }
+        const singleSource = row.item.sources.length === 1 ? row.item.sources[0] : undefined;
+        if (
+          singleSource &&
+          getModelDisabledReason?.(
+            singleSource.instanceId as ProviderInstanceId,
+            singleSource.model,
+          )
+        ) {
+          continue;
+        }
+        const jumpCommand = modelPickerJumpCommandForIndex(selectableModelIndex);
+        if (!jumpCommand) {
+          return mapping;
+        }
+        mapping.set(row.key, jumpCommand);
+        selectableModelIndex += 1;
+      }
+      return mapping;
+    }
     for (const model of visibleModels) {
       if (getModelDisabledReason?.(model.instanceId, model.slug)) {
         continue;
@@ -602,23 +1121,36 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       selectableModelIndex += 1;
     }
     return mapping;
-  }, [getModelDisabledReason, visibleModels]);
+  }, [getModelDisabledReason, isModelFirst, modelFirstRows, visibleModels]);
   const modelJumpModelKeys = useMemo(
     () => [...modelJumpCommandByKey.keys()],
     [modelJumpCommandByKey],
   );
-  const allItemKeys = useMemo(
-    (): string[] => [
+  const allItemKeys = useMemo((): string[] => {
+    if (isModelFirst) {
+      return [
+        ...logicalItems.flatMap((item) => [
+          modelPickerLogicalModelKey(item.modelId),
+          ...item.sources.map((source) =>
+            modelPickerModelKey(source.instanceId as ProviderInstanceId, source.model),
+          ),
+        ]),
+        ...(logicalLegacySection ? [logicalLegacySection.key] : []),
+      ];
+    }
+    return [
       ...flatModels.map((model) => modelPickerModelKey(model.instanceId, model.slug)),
       ...new Set(
         flatModels
           .filter((model) => model.isLegacy)
           .map((model) => modelPickerLegacySectionKey(model.instanceId)),
       ),
-    ],
-    [flatModels],
-  );
+    ];
+  }, [flatModels, isModelFirst, logicalItems, logicalLegacySection]);
   const filteredItemKeys = useMemo((): string[] => {
+    if (isModelFirst) {
+      return modelFirstRows.map((row) => row.key);
+    }
     const modelKeys = visibleModels.map((model) =>
       modelPickerModelKey(model.instanceId, model.slug),
     );
@@ -627,7 +1159,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     modelKeys.splice(legacySection.currentModels.length, 0, legacySection.key);
     return modelKeys;
-  }, [legacySection, visibleModels]);
+  }, [isModelFirst, legacySection, modelFirstRows, visibleModels]);
   const filteredModelByKey = useMemo(
     (): ReadonlyMap<string, ModelPickerItem> =>
       new Map(
@@ -673,8 +1205,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return mapping.size > 0 ? mapping : EMPTY_MODEL_JUMP_LABELS;
   }, [keybindings, modelJumpCommandByKey, modelJumpShortcutContext]);
   const modelListExtraData = useMemo(
-    () => ({ favoritesSet, modelJumpLabelByKey }),
-    [favoritesSet, modelJumpLabelByKey],
+    () => ({ favoritesSet, modelJumpLabelByKey, logicalExpansionOverrides, logicalLegacyExpanded }),
+    [favoritesSet, logicalExpansionOverrides, logicalLegacyExpanded, modelJumpLabelByKey],
   );
 
   useEffect(() => {
@@ -698,6 +1230,14 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       if (!targetModelKey) {
         return;
       }
+      if (isModelFirst) {
+        const logicalModelId = parseModelPickerLogicalModelKey(targetModelKey);
+        const item = logicalModelId !== null ? logicalItemById.get(logicalModelId) : undefined;
+        if (item) {
+          handleLogicalModelSelect(item);
+        }
+        return;
+      }
       const model = parseModelPickerModelKey(targetModelKey);
       if (!model) {
         return;
@@ -710,7 +1250,15 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, true);
     };
-  }, [handleModelSelect, keybindings, modelJumpModelKeys, modelJumpShortcutContext]);
+  }, [
+    handleLogicalModelSelect,
+    handleModelSelect,
+    isModelFirst,
+    keybindings,
+    logicalItemById,
+    modelJumpModelKeys,
+    modelJumpShortcutContext,
+  ]);
 
   useLayoutEffect(() => {
     setShowTopScrollFade(false);
@@ -759,7 +1307,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           autoHighlight
           open
           virtualized
-          value={activeModelKey}
+          value={isModelFirst ? modelFirstActiveKey : activeModelKey}
           onItemHighlighted={(modelKey, eventDetails) => {
             highlightedModelKeyRef.current = typeof modelKey === "string" ? modelKey : null;
             if (eventDetails.reason === "keyboard" && eventDetails.index >= 0) {
@@ -772,6 +1320,20 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
           onValueChange={(modelKey) => {
             if (typeof modelKey !== "string") {
               return;
+            }
+            if (isModelFirst) {
+              if (modelKey === LOGICAL_LEGACY_SECTION_KEY) {
+                setLogicalLegacyExpanded((expanded) => !expanded);
+                return;
+              }
+              const logicalModelId = parseModelPickerLogicalModelKey(modelKey);
+              if (logicalModelId !== null) {
+                const item = logicalItemById.get(logicalModelId);
+                if (item) {
+                  handleLogicalModelSelect(item);
+                }
+                return;
+              }
             }
             const legacyInstanceId = parseModelPickerLegacySectionKey(modelKey);
             if (legacyInstanceId) {
@@ -817,6 +1379,22 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                       ).preventBaseUIHandler?.();
                       e.preventDefault();
                       e.stopPropagation();
+                      if (isModelFirst) {
+                        if (highlightedModelKeyRef.current === LOGICAL_LEGACY_SECTION_KEY) {
+                          setLogicalLegacyExpanded((expanded) => !expanded);
+                          return;
+                        }
+                        const logicalModelId = parseModelPickerLogicalModelKey(
+                          highlightedModelKeyRef.current,
+                        );
+                        if (logicalModelId !== null) {
+                          const item = logicalItemById.get(logicalModelId);
+                          if (item) {
+                            handleLogicalModelSelect(item);
+                          }
+                          return;
+                        }
+                      }
                       const legacyInstanceId = parseModelPickerLegacySectionKey(
                         highlightedModelKeyRef.current,
                       );
@@ -849,6 +1427,101 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                   extraData={modelListExtraData}
                   keyExtractor={(modelKey) => modelKey}
                   renderItem={({ item: modelKey, index }) => {
+                    if (isModelFirst) {
+                      const modelFirstRow = modelFirstRowByKey.get(modelKey);
+                      if (modelFirstRow?.kind === "legacy-header") {
+                        return (
+                          <ComboboxItem
+                            hideIndicator
+                            index={index}
+                            value={modelKey}
+                            aria-expanded={logicalLegacyExpanded}
+                            className="group w-full cursor-pointer rounded-md px-2 py-2"
+                            contentClassName="flex w-full items-center gap-3"
+                          >
+                            <div className="min-w-0 flex-1 text-left">
+                              <div className="text-xs font-medium leading-snug">Legacy models</div>
+                              <div className="mt-1 text-xs font-normal leading-snug text-muted-foreground/70">
+                                {modelFirstRow.count} models
+                              </div>
+                            </div>
+                            <ChevronRightIcon
+                              className={cn(
+                                "size-4 transition-transform",
+                                logicalLegacyExpanded && "rotate-90",
+                              )}
+                            />
+                          </ComboboxItem>
+                        );
+                      }
+                      if (!modelFirstRow) {
+                        return null;
+                      }
+                      if (modelFirstRow.kind === "logical") {
+                        const singleSourceEntry =
+                          modelFirstRow.item.sources.length === 1
+                            ? entryByInstanceId.get(
+                                modelFirstRow.item.sources[0]!.instanceId as ProviderInstanceId,
+                              )
+                            : undefined;
+                        return (
+                          <LogicalModelRow
+                            index={index}
+                            item={modelFirstRow.item}
+                            expanded={isLogicalModelExpanded(modelFirstRow.item)}
+                            singleSourceEntry={singleSourceEntry}
+                            jumpLabel={modelJumpLabelByKey.get(modelKey) ?? null}
+                          />
+                        );
+                      }
+                      const sourceEntry = entryByInstanceId.get(
+                        modelFirstRow.source.instanceId as ProviderInstanceId,
+                      );
+                      if (!sourceEntry) {
+                        return null;
+                      }
+                      const sourceOption = modelOptionsByInstance
+                        .get(sourceEntry.instanceId)
+                        ?.find((candidate) => candidate.slug === modelFirstRow.source.model);
+                      return (
+                        <ModelListRow
+                          key={modelKey}
+                          index={index}
+                          model={
+                            sourceOption ?? {
+                              slug: modelFirstRow.source.model,
+                              name: modelFirstRow.source.name ?? modelFirstRow.source.model,
+                            }
+                          }
+                          instanceId={sourceEntry.instanceId}
+                          driverKind={sourceEntry.driverKind}
+                          providerDisplayName={sourceEntry.displayName}
+                          providerAccentColor={sourceEntry.accentColor}
+                          isFavorite={favoritesSet.has(
+                            providerModelKey(sourceEntry.instanceId, modelFirstRow.source.model),
+                          )}
+                          isSelected={modelKey === modelFirstActiveKey}
+                          showProvider
+                          preferShortName={!isLocked}
+                          useTriggerLabel={false}
+                          showNewBadge={sourceOption?.badge === "new"}
+                          unavailable={sourceOption?.isUnavailable === true}
+                          viaProxy={sourceOption?.viaProxy === true}
+                          capabilitiesDegraded={sourceOption?.capabilitiesDegraded === true}
+                          subscription={modelFirstRow.source.authMode === "subscription"}
+                          jumpLabel={modelJumpLabelByKey.get(modelKey) ?? null}
+                          disabledReason={
+                            getModelDisabledReason?.(
+                              sourceEntry.instanceId,
+                              modelFirstRow.source.model,
+                            ) ?? null
+                          }
+                          onToggleFavorite={() =>
+                            toggleFavorite(sourceEntry.instanceId, modelFirstRow.source.model)
+                          }
+                        />
+                      );
+                    }
                     if (legacySection?.key === modelKey) {
                       return (
                         <ComboboxItem
@@ -898,6 +1571,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                         useTriggerLabel={false}
                         showNewBadge={model.badge === "new"}
                         unavailable={model.isUnavailable === true}
+                        viaProxy={model.viaProxy === true}
+                        capabilitiesDegraded={model.capabilitiesDegraded === true}
                         jumpLabel={modelJumpLabelByKey.get(modelKey) ?? null}
                         disabledReason={disabledReason}
                         onToggleFavorite={() => toggleFavorite(model.instanceId, model.slug)}

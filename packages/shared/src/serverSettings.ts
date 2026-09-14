@@ -336,6 +336,13 @@ export function applyServerSettingsPatch(
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
       : {}),
+    ...(patch.modelBackendConnections !== undefined
+      ? { modelBackendConnections: patch.modelBackendConnections }
+      : {}),
+    ...(patch.modelCredentials !== undefined ? { modelCredentials: patch.modelCredentials } : {}),
+    ...(patch.modelRouterRoutes !== undefined
+      ? { modelRouterRoutes: patch.modelRouterRoutes }
+      : {}),
     ...(projectSettingsOverridesPatch !== undefined
       ? {
           projectSettingsOverrides: Object.fromEntries(

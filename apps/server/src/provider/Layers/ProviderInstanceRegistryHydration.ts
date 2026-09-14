@@ -43,16 +43,21 @@
  */
 import {
   defaultInstanceIdForDriver,
+  ModelBackendConnections,
+  type ModelProxyConfig,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   ServerSettings,
+  T3_ROUTER_CONNECTION_ID,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
+import { ModelRouterProxy } from "../router/ModelRouterProxy.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
@@ -104,6 +109,44 @@ export const deriveProviderInstanceConfigMap = (
 };
 
 /**
+ * Connections map the registry resolves `connectionId` references against:
+ * the user's `modelBackendConnections` plus, when the model router is
+ * running, a synthesized entry under the reserved `T3_ROUTER_CONNECTION_ID`
+ * ("t3-router").
+ *
+ * Instances opt into the router by setting `connectionId: "t3-router"`; the
+ * synthesized entry is injected under that same key, so the reference needs
+ * no rewrite — `resolveInstanceBackend` finds it like any other connection.
+ * If the user has claimed the id with a real connection, their entry wins
+ * and nothing is injected. When the router is disabled (its loopback listener
+ * failed to bind) nothing is injected either, and referencing instances stay
+ * native orphans — `resolveInstanceBackend` degrades a missing connection to
+ * native silently, which is exactly the desired failure mode.
+ *
+ * Pure & exported for unit tests.
+ */
+export const deriveRegistryConnections = (
+  settings: ServerSettings,
+  routerBaseUrl: string | undefined,
+): ModelBackendConnections => {
+  const connections: Record<string, ModelProxyConfig> = {
+    ...settings.modelBackendConnections,
+  };
+  if (routerBaseUrl !== undefined && !(T3_ROUTER_CONNECTION_ID in connections)) {
+    connections[T3_ROUTER_CONNECTION_ID] = {
+      // The `/openai` prefix routes to the router's OpenAI-shaped surface;
+      // its Anthropic surface lives under the same listener and harnesses
+      // reach it by appending `/v1/messages`. The probe's
+      // `GET {baseUrl}/models` lands on the OpenAI models list.
+      baseUrl: `${routerBaseUrl}/openai`,
+      protocols: ["openai", "anthropic"],
+      displayName: "T3 Router",
+    };
+  }
+  return connections as ModelBackendConnections;
+};
+
+/**
  * Layer that consumes `ProviderInstanceRegistryMutator` and forks a
  * settings-watcher fiber. The fiber's lifetime is tied to the enclosing
  * layer scope (process lifetime in production), so it is interrupted on
@@ -118,11 +161,16 @@ const SettingsWatcherLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const mutator = yield* ProviderInstanceRegistryMutator;
     const serverSettings = yield* ServerSettingsService;
+    const routerBaseUrl = yield* routerBaseUrlFromContext;
     const settingsChanges = yield* serverSettings.subscribeChanges;
     yield* settingsChanges.pipe(
       Stream.runForEach((next) =>
         mutator
-          .reconcile(deriveProviderInstanceConfigMap(next))
+          .reconcile(
+            deriveProviderInstanceConfigMap(next),
+            deriveRegistryConnections(next, routerBaseUrl),
+            next.modelCredentials,
+          )
           .pipe(
             Effect.catchCause((cause) =>
               Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
@@ -132,6 +180,17 @@ const SettingsWatcherLive = Layer.effectDiscard(
       Effect.forkScoped,
     );
   }),
+);
+
+/**
+ * The model router's base URL when its service is in the ambient context
+ * (`Effect.serviceOption`, so hydration layers built without the router —
+ * tests, partial harnesses — keep working; the router simply never injects
+ * its connection there). The router binds once per process, so a single
+ * read at layer build time is enough.
+ */
+const routerBaseUrlFromContext = Effect.map(Effect.serviceOption(ModelRouterProxy), (router) =>
+  Option.isSome(router) ? router.value.baseUrl : undefined,
 );
 
 /**
@@ -157,6 +216,7 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
 > = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
+    const routerBaseUrl = yield* routerBaseUrlFromContext;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -164,12 +224,23 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
       initialSettings === undefined
         ? ({} as ProviderInstanceConfigMap)
         : deriveProviderInstanceConfigMap(initialSettings);
+    const initialConnections =
+      initialSettings === undefined
+        ? undefined
+        : deriveRegistryConnections(initialSettings, routerBaseUrl);
 
     const mutableLayer = ProviderInstanceRegistryMutableLayer({
       drivers: BUILT_IN_DRIVERS,
       configMap: initialConfigMap,
+      // Omitted when settings are unavailable: reconcile normalizes an
+      // absent map to "no connections" / "no credentials", same as the
+      // `{}` decode defaults.
+      ...(initialConnections === undefined ? {} : { connections: initialConnections }),
+      ...(initialSettings?.modelCredentials === undefined
+        ? {}
+        : { credentials: initialSettings.modelCredentials }),
     });
 
     return SettingsWatcherLive.pipe(Layer.provideMerge(mutableLayer));
   }),
-) as Layer.Layer<ProviderInstanceRegistry, never, BuiltInDriversEnv | ServerSettingsService>;
+);
