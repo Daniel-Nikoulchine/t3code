@@ -4,9 +4,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 import { runMigrations } from "../Migrations.ts";
-import migrateFallbackCombo from "./052_ProjectionThreadFallbackCombo.ts";
+import migrateFallbackCombo from "./053_ProjectionThreadFallbackCombo.ts";
 
-it.layer(NodeSqliteClient.layerMemory())("052_ProjectionThreadFallbackCombo", (it) => {
+it.layer(NodeSqliteClient.layerMemory())("053_ProjectionThreadFallbackCombo", (it) => {
   it.effect("adds a nullable combo column without touching existing rows", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -21,7 +21,7 @@ it.layer(NodeSqliteClient.layerMemory())("052_ProjectionThreadFallbackCombo", (i
           '{"instanceId":"codex","model":"gpt-5.4"}', 'full-access', ${now}, ${now}
         )
       `;
-      yield* runMigrations({ toMigrationInclusive: 52 });
+      yield* runMigrations({ toMigrationInclusive: 53 });
       const migrated = yield* sql<{ readonly combo: string | null }>`
         SELECT fallback_combo_json AS "combo" FROM projection_threads WHERE thread_id = 'thread-1'
       `;
