@@ -587,7 +587,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ...loaded,
         messages: mergeById(older.messages, loaded.messages),
         activities: mergeById(older.activities, loaded.activities),
-        proposedPlans: mergeById(older.proposedPlans, loaded.proposedPlans),
         checkpoints: [
           ...older.checkpoints.filter((row) => !seenCheckpoints.has(row.turnId)),
           ...loaded.checkpoints,

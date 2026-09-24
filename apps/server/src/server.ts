@@ -517,7 +517,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
-  Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+  //
+  // `provide` (not bare merge): hydration requires the router service, and
+  // merged layers build last-merged-first, so only an explicit edge orders
+  // hydration after the router bind. `ModelRouterProxyLive` is the same
+  // reference as above, so the memo builds and binds it once.
+  Layer.provideMerge(Layer.provide(ProviderInstanceRegistryHydrationLive, ModelRouterProxyLive)),
 ).pipe(
   Layer.provideMerge(AntigravityInstallation.layer),
   // Shared native/canonical NDJSON writers used by both the per-instance

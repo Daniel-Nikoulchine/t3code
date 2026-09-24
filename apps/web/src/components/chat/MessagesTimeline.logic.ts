@@ -27,7 +27,7 @@ import {
   type TimelineEntry,
   type WorkLogEntry,
 } from "../../session-logic";
-import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import { type ChatMessage, type TurnDiffSummary } from "../../types";
 import type { QueuedComposerMessage } from "../../queuedMessageStore";
 import {
   type MessageId,
@@ -381,12 +381,6 @@ export type MessagesTimelineRow =
       assistantCopyStreaming: boolean;
     }
   | {
-      kind: "proposed-plan";
-      id: string;
-      createdAt: string;
-      proposedPlan: ProposedPlan;
-    }
-  | {
       kind: "working";
       id: string;
       createdAt: string | null;
@@ -543,9 +537,6 @@ function lastUserMessageIndex(timelineEntries: ReadonlyArray<TimelineEntry>): nu
 function timelineEntryTurnId(entry: TimelineEntry): TurnId | null {
   if (entry.kind === "message") {
     return entry.message.role === "assistant" ? (entry.message.turnId ?? null) : null;
-  }
-  if (entry.kind === "proposed-plan") {
-    return entry.proposedPlan.turnId;
   }
   return entry.kind === "work" ? (entry.entry.turnId ?? null) : null;
 }
@@ -1226,16 +1217,6 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-    if (timelineEntry.kind === "proposed-plan") {
-      nextRows.push({
-        kind: "proposed-plan",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        proposedPlan: timelineEntry.proposedPlan,
-      });
-      continue;
-    }
-
     const assistantResponseStillInProgress =
       timelineEntry.message.role === "assistant" &&
       timelineEntry.message.turnId !== null &&
@@ -1484,9 +1465,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       const bc = b as typeof a;
       return a.createdAt === bc.createdAt && a.label === bc.label;
     }
-
-    case "proposed-plan":
-      return a.proposedPlan === (b as typeof a).proposedPlan;
 
     case "queued-message": {
       const bq = b as typeof a;

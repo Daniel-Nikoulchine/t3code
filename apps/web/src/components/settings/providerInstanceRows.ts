@@ -24,14 +24,13 @@ const PROVIDER_SETTINGS = DRIVER_OPTIONS.map((definition) => ({
 }));
 
 /**
- * Derive the per-instance rows the Harness tab renders: the default slot
+ * Derive the per-instance rows the harness editor renders: the default slot
  * per known driver (explicit envelope, else synthesized from the legacy
  * `providers` blob minus its enabled flag) plus every custom instance, plus
  * instances whose driver this build no longer ships.
  *
  * The Providers tab owns the named connections map; per-instance routing is
- * the connection selection on the Harness card, so these rows are
- * Harness-only.
+ * the connection selection on the harness card.
  * Pure: no hooks, no persistence — callers write through
  * `buildProviderInstanceUpdatePatch` + `useUpdateEnvironmentSettings`.
  */

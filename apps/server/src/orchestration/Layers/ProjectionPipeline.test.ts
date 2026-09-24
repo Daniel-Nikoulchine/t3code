@@ -3,7 +3,6 @@ import {
   CheckpointRef,
   CommandId,
   CorrelationId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
   ProjectId,
@@ -141,7 +140,6 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-import-shell-")
             title: "Imported thread",
             modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
             runtimeMode: "full-access",
-            interactionMode: "default",
             branch: null,
             worktreePath: null,
             createdAt,
@@ -240,7 +238,6 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-branch-pr-proje
             title: "Pull request thread",
             modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
             runtimeMode: "full-access",
-            interactionMode: "default",
             branch: "feature",
             worktreePath: null,
             createdAt: now,
@@ -2913,7 +2910,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             model: "gpt-5-codex",
           },
           runtimeMode: "approval-required",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: "2026-02-26T12:30:01.000Z",
@@ -3056,7 +3052,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             model: "gpt-5-codex",
           },
           runtimeMode: "approval-required",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: "2026-02-26T12:35:01.000Z",
@@ -3241,7 +3236,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             model: "gpt-5-codex",
           },
           runtimeMode: "approval-required",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: "2026-03-01T08:00:01.000Z",
@@ -3417,17 +3411,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           ('summary-other-thread', 'thread-shell-summary-other', NULL, 'pending', NULL,
            '2026-03-01T08:00:06.000Z', NULL)
       `;
-      // Empty markdown must not be decoded when the shell only needs plan status.
-      yield* sql`
-        INSERT INTO projection_thread_proposed_plans (
-          plan_id, thread_id, turn_id, plan_markdown, implemented_at,
-          implementation_thread_id, created_at, updated_at
-        ) VALUES (
-          'summary-plan', 'thread-shell-summary', 'turn-shell-summary-1', '', NULL,
-          NULL, '2026-03-01T08:00:06.000Z', '2026-03-01T08:00:06.000Z'
-        )
-      `;
-
       const refreshEvents = [
         {
           type: "thread.session-set",
@@ -3481,13 +3464,11 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
           readonly latestUserMessageAt: string | null;
           readonly pendingApprovalCount: number;
           readonly pendingUserInputCount: number;
-          readonly hasActionableProposedPlan: number;
         }>`
           SELECT
             latest_user_message_at AS "latestUserMessageAt",
             pending_approval_count AS "pendingApprovalCount",
-            pending_user_input_count AS "pendingUserInputCount",
-            has_actionable_proposed_plan AS "hasActionableProposedPlan"
+            pending_user_input_count AS "pendingUserInputCount"
           FROM projection_threads
           WHERE thread_id = 'thread-shell-summary'
         `;
@@ -3496,7 +3477,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             latestUserMessageAt: "2026-03-01T08:00:02.000Z",
             pendingApprovalCount: 1,
             pendingUserInputCount: 1,
-            hasActionableProposedPlan: 1,
           },
         ]);
       }
@@ -3553,7 +3533,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             model: "gpt-5-codex",
           },
           runtimeMode: "approval-required",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: "2026-02-26T12:45:01.000Z",
@@ -4138,10 +4117,6 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
         payload: {
           threadId,
           messageId,
-          sourceProposedPlan: {
-            threadId: sourcePlanThreadId,
-            planId: sourcePlanId,
-          },
           runtimeMode: "approval-required",
           createdAt: turnStartedAt,
         },
@@ -4193,15 +4168,11 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       return yield* sql<{
         readonly turnId: string;
         readonly userMessageId: string | null;
-        readonly sourceProposedPlanThreadId: string | null;
-        readonly sourceProposedPlanId: string | null;
         readonly startedAt: string;
       }>`
         SELECT
           turn_id AS "turnId",
           pending_message_id AS "userMessageId",
-          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
-          source_proposed_plan_id AS "sourceProposedPlanId",
           started_at AS "startedAt"
         FROM projection_turns
         WHERE turn_id = ${turnId}
@@ -4212,8 +4183,6 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       {
         turnId: "turn-restart",
         userMessageId: "message-restart",
-        sourceProposedPlanThreadId: "thread-plan-source",
-        sourceProposedPlanId: "plan-source",
         startedAt: turnStartedAt,
       },
     ]);
@@ -4393,7 +4362,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           model: "claude-sonnet-4-5",
         },
         runtimeMode: "full-access",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: null,
         worktreePath: null,
         combo,
@@ -4469,7 +4437,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           model: "gpt-5-codex",
         },
         runtimeMode: "full-access",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         branch: null,
         worktreePath: null,
         createdAt,
@@ -4501,7 +4468,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           title,
           modelSelection,
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt,
@@ -4515,7 +4481,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
         "projection_thread_activities",
         "projection_thread_sessions",
         "projection_turns",
-        "projection_thread_proposed_plans",
         "projection_pending_approvals",
       ];
 
@@ -4543,7 +4508,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           attachments: [],
         },
         runtimeMode: "full-access",
-        interactionMode: "default",
         createdAt,
       });
       yield* engine.dispatch({
@@ -4558,21 +4522,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           payload: { requestId: "request-retry-1" },
           turnId: null,
           createdAt,
-        },
-        createdAt,
-      });
-      yield* engine.dispatch({
-        type: "thread.proposed-plan.upsert",
-        commandId: CommandId.make("cmd-retry-plan-1"),
-        threadId,
-        proposedPlan: {
-          id: "plan-retry-1",
-          turnId: null,
-          planMarkdown: "# Plan",
-          implementedAt: null,
-          implementationThreadId: null,
-          createdAt,
-          updatedAt: createdAt,
         },
         createdAt,
       });
@@ -4596,7 +4545,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       }
       const populatedShell = Option.getOrThrow(yield* snapshotQuery.getThreadShellById(threadId));
       assert.isTrue(populatedShell.hasPendingApprovals);
-      assert.isTrue(populatedShell.hasActionableProposedPlan);
 
       yield* engine.dispatch({
         type: "thread.delete",
@@ -4611,7 +4559,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
       const shell = Option.getOrThrow(yield* snapshotQuery.getThreadShellById(threadId));
       assert.strictEqual(shell.title, "Second attempt");
       assert.isFalse(shell.hasPendingApprovals);
-      assert.isFalse(shell.hasActionableProposedPlan);
       for (const table of perThreadTables) {
         assert.strictEqual(yield* countRowsForThread(table), 0, `${table} should be empty`);
       }
@@ -4659,7 +4606,6 @@ engineLayer("OrchestrationProjectionPipeline via engine dispatch", (it) => {
           threadId: id,
           projectId,
           title: "Attachment cleanup thread",
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",

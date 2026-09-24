@@ -8,7 +8,6 @@ import {
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
-  ProviderInteractionMode,
   ProviderDriverKind,
   ProviderOptionSelection,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -39,7 +38,6 @@ import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection, resolveAppModelSelectionForInstance } from "./modelSelection";
 import {
-  DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type ChatFileAttachment,
   type ChatImageAttachment,
@@ -251,7 +249,6 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   // replace them; legacy entries predate the flag and read as seeded too.
   modelSelectionExplicit: Schema.optionalKey(Schema.Boolean),
   runtimeMode: Schema.optionalKey(RuntimeMode),
-  interactionMode: Schema.optionalKey(ProviderInteractionMode),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -318,7 +315,6 @@ const PersistedDraftThreadState = Schema.Struct({
   loadBalancedEnvironmentId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
@@ -402,7 +398,6 @@ export interface ComposerThreadDraftState {
    */
   modelSelectionExplicit?: boolean;
   runtimeMode: RuntimeMode | null;
-  interactionMode: ProviderInteractionMode | null;
 }
 
 /**
@@ -445,7 +440,6 @@ export interface DraftSessionState {
   loadBalancedEnvironmentId?: EnvironmentId | null;
   createdAt: string;
   runtimeMode: RuntimeMode;
-  interactionMode: ProviderInteractionMode;
   branch: string | null;
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
@@ -519,7 +513,6 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
-      interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
     },
@@ -536,7 +529,6 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
-      interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
     },
@@ -552,7 +544,6 @@ interface ComposerDraftStoreState {
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
-      interactionMode?: ProviderInteractionMode;
       environmentSelection?: "auto" | "manual";
       loadBalancedEnvironmentId?: EnvironmentId | null;
     },
@@ -606,10 +597,6 @@ interface ComposerDraftStoreState {
   setRuntimeMode: (
     threadRef: ComposerThreadTarget,
     runtimeMode: RuntimeMode | null | undefined,
-  ) => void;
-  setInteractionMode: (
-    threadRef: ComposerThreadTarget,
-    interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => boolean;
   /** Returns the ids the draft accepted; duplicates and over-cap attachments are left out. */
@@ -786,7 +773,6 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
   runtimeMode: null,
-  interactionMode: null,
 });
 
 /**
@@ -808,7 +794,6 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     modelSelectionByProvider: {},
     activeProvider: null,
     runtimeMode: null,
-    interactionMode: null,
   };
 }
 
@@ -901,8 +886,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.reviewComments.length === 0 &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
-    draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.runtimeMode === null
   );
 }
 
@@ -1503,7 +1487,6 @@ function createDraftThreadState(
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
-    interactionMode?: ProviderInteractionMode;
     environmentSelection?: "auto" | "manual";
     loadBalancedEnvironmentId?: EnvironmentId | null;
   },
@@ -1551,8 +1534,6 @@ function createDraftThreadState(
         : {}),
     createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
     runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-    interactionMode:
-      options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     branch: nextBranch,
     worktreePath: nextWorktreePath,
     envMode:
@@ -1587,7 +1568,6 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.loadBalancedEnvironmentId === right.loadBalancedEnvironmentId &&
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
-    left.interactionMode === right.interactionMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
@@ -1731,11 +1711,6 @@ function normalizePersistedDraftThreads(
         runtimeMode: isRuntimeMode(candidateDraftThread.runtimeMode)
           ? candidateDraftThread.runtimeMode
           : DEFAULT_RUNTIME_MODE,
-        interactionMode:
-          candidateDraftThread.interactionMode === "plan" ||
-          candidateDraftThread.interactionMode === "default"
-            ? candidateDraftThread.interactionMode
-            : DEFAULT_INTERACTION_MODE,
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
@@ -1797,7 +1772,6 @@ function normalizePersistedDraftThreads(
           logicalProjectKey,
           createdAt: new Date().toISOString(),
           runtimeMode: DEFAULT_RUNTIME_MODE,
-          interactionMode: DEFAULT_INTERACTION_MODE,
           branch: null,
           worktreePath: null,
           envMode: "local",
@@ -1898,10 +1872,6 @@ function normalizePersistedDraftsByThreadId(
     const runtimeMode = isRuntimeMode(draftCandidate.runtimeMode)
       ? draftCandidate.runtimeMode
       : null;
-    const interactionMode =
-      draftCandidate.interactionMode === "plan" || draftCandidate.interactionMode === "default"
-        ? draftCandidate.interactionMode
-        : null;
     const contextIds = new Map<string, string>();
     for (const [kind, entries] of [
       ["image", attachments],
@@ -1996,8 +1966,7 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       previewAnnotations.length === 0 &&
       !hasModelData &&
-      !runtimeMode &&
-      !interactionMode
+      !runtimeMode
     ) {
       continue;
     }
@@ -2029,7 +1998,6 @@ function normalizePersistedDraftsByThreadId(
           }
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
-      ...(interactionMode ? { interactionMode } : {}),
     };
   }
 
@@ -2067,7 +2035,7 @@ function stripLegacyModelSeedsFromEmptyDraftSessions(
         modelSelectionExplicit: _modelSelectionExplicit,
         ...retained
       } = draft;
-      return retained.runtimeMode || retained.interactionMode ? [[threadKey, retained]] : [];
+      return retained.runtimeMode ? [[threadKey, retained]] : [];
     }),
   );
 }
@@ -2129,8 +2097,7 @@ export function partializeComposerDraftStoreState(
       draft.previewAnnotations.length === 0 &&
       draft.reviewComments.length === 0 &&
       !hasModelData &&
-      draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.runtimeMode === null
     ) {
       continue;
     }
@@ -2193,7 +2160,6 @@ export function partializeComposerDraftStoreState(
           }
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
-      ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
     };
     persistedDraftsByThreadKey[threadKey] = persistedDraft;
   }
@@ -2459,7 +2425,6 @@ function toHydratedThreadDraft(
     activeProvider,
     ...(persistedDraft.modelSelectionExplicit ? { modelSelectionExplicit: true } : {}),
     runtimeMode: persistedDraft.runtimeMode ?? null,
-    interactionMode: persistedDraft.interactionMode ?? null,
   };
 }
 
@@ -2480,7 +2445,6 @@ function toHydratedDraftThreadState(
       ),
     createdAt: persistedDraftThread.createdAt,
     runtimeMode: persistedDraftThread.runtimeMode,
-    interactionMode: persistedDraftThread.interactionMode,
     branch: persistedDraftThread.branch,
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
@@ -2771,7 +2735,6 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   ? existing.createdAt
                   : options.createdAt || existing.createdAt,
               runtimeMode: options.runtimeMode ?? existing.runtimeMode,
-              interactionMode: options.interactionMode ?? existing.interactionMode,
               branch: nextBranch,
               worktreePath: nextWorktreePath,
               envMode:
@@ -2787,7 +2750,6 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.loadBalancedEnvironmentId === existing.loadBalancedEnvironmentId &&
               nextDraftThread.createdAt === existing.createdAt &&
               nextDraftThread.runtimeMode === existing.runtimeMode &&
-              nextDraftThread.interactionMode === existing.interactionMode &&
               nextDraftThread.branch === existing.branch &&
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
@@ -3235,35 +3197,6 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const nextDraft: ComposerThreadDraftState = {
               ...base,
               runtimeMode: nextRuntimeMode,
-            };
-            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
-            if (shouldRemoveDraft(nextDraft)) {
-              delete nextDraftsByThreadKey[threadKey];
-            } else {
-              nextDraftsByThreadKey[threadKey] = nextDraft;
-            }
-            return { draftsByThreadKey: nextDraftsByThreadKey };
-          });
-        },
-        setInteractionMode: (threadRef, interactionMode) => {
-          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
-          if (threadKey.length === 0) {
-            return;
-          }
-          const nextInteractionMode =
-            interactionMode === "plan" || interactionMode === "default" ? interactionMode : null;
-          set((state) => {
-            const existing = state.draftsByThreadKey[threadKey];
-            if (!existing && nextInteractionMode === null) {
-              return state;
-            }
-            const base = existing ?? createEmptyThreadDraft();
-            if (base.interactionMode === nextInteractionMode) {
-              return state;
-            }
-            const nextDraft: ComposerThreadDraftState = {
-              ...base,
-              interactionMode: nextInteractionMode,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {

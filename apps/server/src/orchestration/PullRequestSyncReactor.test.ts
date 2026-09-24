@@ -71,7 +71,6 @@ function makeThread(
       model: "gpt-5",
     },
     runtimeMode: "full-access",
-    interactionMode: "default",
     branch: null,
     worktreePath: null,
     pullRequests: [],
@@ -85,7 +84,6 @@ function makeThread(
     latestUserMessageAt: "2026-08-20T00:00:00.000Z",
     hasPendingApprovals: false,
     hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
     ...overrides,
   };
 }

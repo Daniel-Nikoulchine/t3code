@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 
 import {
   isRetryableProviderError,
@@ -9,6 +10,7 @@ import {
   ProviderAdapterValidationError,
   ProviderSessionNotFoundError,
   ProviderValidationError,
+  toUserFacingFailureDetail,
 } from "./Errors.ts";
 
 const TRIGGERS = ["rate-limit", "provider-error", "transport-error"] as const;
@@ -204,5 +206,40 @@ describe("isRetryableProviderError", () => {
         expect(isRetryableProviderError(input, trigger)).toBe(false);
       }
     }
+  });
+});
+
+describe("toUserFacingFailureDetail", () => {
+  const upstreamMessage =
+    "Internal error: MiniMax Code Runtime failed: BYOK provider custom_provider:t3-backend " +
+    "upstream error: 429 Upstream request failed: [rate_limit_exceeded] Rate limit exceeded. " +
+    "Please retry after a brief wait.";
+
+  it("returns a defect message without its server-internal stack trace", () => {
+    const detail = toUserFacingFailureDetail(Cause.die(new Error(upstreamMessage)));
+
+    expect(detail).toBe(upstreamMessage);
+    expect(detail).not.toMatch(/^\s*at\s/m);
+    expect(detail).not.toContain("file://");
+  });
+
+  it("keeps the upstream rate-limit signal intact for the user", () => {
+    const detail = toUserFacingFailureDetail(Cause.die(new Error(upstreamMessage)));
+
+    expect(isRetryableProviderError(new Error(detail), "rate-limit")).toBe(true);
+  });
+
+  it("returns failure messages verbatim", () => {
+    expect(toUserFacingFailureDetail(Cause.fail(new Error("boom")))).toBe("boom");
+    expect(toUserFacingFailureDetail(Cause.fail("plain string failure"))).toBe(
+      "plain string failure",
+    );
+  });
+
+  it("falls back to a generic message when there is nothing readable", () => {
+    const detail = toUserFacingFailureDetail(Cause.empty);
+
+    expect(detail.length).toBeGreaterThan(0);
+    expect(detail).not.toMatch(/^\s*at\s/m);
   });
 });

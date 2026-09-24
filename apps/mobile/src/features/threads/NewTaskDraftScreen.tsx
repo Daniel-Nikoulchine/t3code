@@ -460,7 +460,6 @@ export function NewTaskDraftScreen(props: {
     offersUsageLimits: offersUsageLimits,
     enabled: isComposerFocused && !isComposerInteractionLocked,
     onChangeDraftMessage: flow.setPrompt,
-    onUpdateInteractionMode: flow.planModeEnabled ? flow.setInteractionMode : undefined,
   });
   const voiceInput = useVoiceInputController({
     ownerKey: flow.draftKey,
@@ -1685,26 +1684,6 @@ export function NewTaskDraftScreen(props: {
                         onPress={settingsSheetPresentation.open}
                       />
                     </View>
-                    {flow.planModeEnabled ? (
-                      <ComposerInlineControl
-                        accessibilityHint={`Switches to ${flow.interactionMode === "plan" ? "Build" : "Plan"} mode`}
-                        accessibilityLabel={`Interaction mode: ${flow.interactionMode === "plan" ? "Plan" : "Build"}`}
-                        disabled={isComposerInteractionLocked}
-                        emphasized
-                        icon={
-                          flow.interactionMode === "plan"
-                            ? { ios: "list.bullet.clipboard", android: "auto_awesome" }
-                            : { ios: "hammer", android: "construction" }
-                        }
-                        label={flow.interactionMode === "plan" ? "Plan" : "Build"}
-                        onPress={() =>
-                          flow.setInteractionMode(
-                            flow.interactionMode === "plan" ? "default" : "plan",
-                          )
-                        }
-                        showChevron={false}
-                      />
-                    ) : null}
                   </View>
                 </>
               )}

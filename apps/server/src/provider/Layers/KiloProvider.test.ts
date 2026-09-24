@@ -71,6 +71,37 @@ describe("Kilo provider metadata", () => {
     expect(parseKiloModelsCliOutput("help text without models\n--verbose\n")).toEqual([]);
   });
 
+  it("never surfaces the t3-backend harness bucket as subProvider", () => {
+    expect(parseKiloModelsCliOutput("t3-backend/opencode-go/gpt-5.6")).toEqual([
+      {
+        slug: "t3-backend/opencode-go/gpt-5.6",
+        name: "gpt-5.6",
+        isCustom: false,
+        subProvider: "opencode-go",
+        capabilities: { optionDescriptors: [] },
+      },
+    ]);
+    expect(parseKiloModelsCliOutput("t3-backend/gpt-5.6")).toEqual([
+      {
+        slug: "t3-backend/gpt-5.6",
+        name: "gpt-5.6",
+        isCustom: false,
+        capabilities: { optionDescriptors: [] },
+      },
+    ]);
+  });
+
+  it("degrades a stale bucket-prefixed kilo id to the bare model", () => {
+    expect(parseKiloModelsCliOutput("t3-backend/t3-backend/probe-go")).toEqual([
+      {
+        slug: "t3-backend/probe-go",
+        name: "probe-go",
+        isCustom: false,
+        capabilities: { optionDescriptors: [] },
+      },
+    ]);
+  });
+
   it("interprets kilo auth list output", () => {
     expect(parseKiloAuthListOutput("You are logged in with Kilo.")).toBe(true);
     expect(parseKiloAuthListOutput("Logged in as user@example.com")).toBe(true);

@@ -97,7 +97,8 @@ export function ProviderIcon(props: ProviderIconProps) {
     );
   }
 
-  if (props.provider === "pi") {
+  // Oh My Pi shares the Pi family mark — no dedicated asset exists.
+  if (props.provider === "pi" || props.provider === "omp") {
     return (
       <Svg width={size} height={size} viewBox="0 0 800 800" fill="none">
         <Path d="M0 0H800V800H0V0Z" fill={isDarkMode ? "#000000" : "#000000"} />
@@ -157,6 +158,21 @@ export function ProviderIcon(props: ProviderIconProps) {
           <Rect x={12} y={6} width={3} height={3} />
           <Polygon points="9 12 12 12 12 15 15 15 15 12 12 9 9 9 9 6 6 6 6 15 9 15 9 12" />
         </G>
+      </Svg>
+    );
+  }
+
+  if (props.provider === "minimax") {
+    return (
+      <Svg width={size} height={size} viewBox="0 0 32 32" fill="none">
+        <Rect width={32} height={32} rx={7} fill="#1a1a1a" />
+        <Path
+          d="M7 24V8l9 10 9-10v16"
+          stroke="#fff"
+          strokeWidth={3}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </Svg>
     );
   }

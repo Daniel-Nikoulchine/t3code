@@ -57,7 +57,6 @@ const readModelWithThread = Effect.gen(function* () {
       title: "Bootstrap thread",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       createdAt,
@@ -80,7 +79,6 @@ const turnStartCommand = {
   threadId,
   message: { messageId, role: "user" as const, text: "Build it", attachments: [] },
   runtimeMode: "full-access" as const,
-  interactionMode: "default" as const,
   createdAt,
 };
 

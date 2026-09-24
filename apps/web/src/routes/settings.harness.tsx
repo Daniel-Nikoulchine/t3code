@@ -1,13 +1,52 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
+import { EnvironmentProviderSettings } from "../components/settings/ProviderSettingsPanel";
+import { SelectedEnvironmentProviderSettings } from "../components/settings/providerSettingsEnvironment";
+import { SettingsPageContainer } from "../components/settings/settingsLayout";
+import { useSettingsScope } from "../components/settings/SettingsScopeContext";
+
 /**
- * The Providers tab merged the harness instance editor with the model
- * backend settings, so this route no longer renders anything of its own. It
- * stays registered to keep old deep links (and the paths still referenced by
- * cached clients) working, forwarding the provider deep-link target and any
- * explicit scope selection to `/settings/providers`.
+ * The Harness tab: the full per-environment harness instance editor
+ * (Display, Setup, Sign in, Connection, Models, Runtime, Environment).
+ * The Providers tab holds only the shared model backend settings
+ * (connections, API keys, routing) below no instance editor.
  */
+function SettingsHarnessRoute() {
+  const { instanceId } = Route.useSearch();
+  const { environment, scope } = useSettingsScope();
+  if (!environment) {
+    return (
+      <p className="p-8 text-sm text-muted-foreground">
+        {scope.kind === "environment"
+          ? `Reconnect ${scope.label} to set up its harness instances.`
+          : "Connect an environment to set up its harness instances."}
+      </p>
+    );
+  }
+  return (
+    <SettingsPageContainer width="wide" className="gap-8">
+      <SelectedEnvironmentProviderSettings
+        key={environment.environmentId}
+        environment={environment}
+        searchAnchorId="providers"
+        targetInstanceId={instanceId}
+        render={(gated) => (
+          <EnvironmentProviderSettings
+            environmentId={gated.environmentId}
+            environmentLabel={gated.environmentLabel}
+            readOnly={gated.readOnly}
+            headerLabel="Harness"
+            {...(gated.targetInstanceId !== undefined
+              ? { targetInstanceId: gated.targetInstanceId }
+              : {})}
+          />
+        )}
+      />
+    </SettingsPageContainer>
+  );
+}
+
 export const Route = createFileRoute("/settings/harness")({
   validateSearch: (raw: Record<string, unknown>) => ({
     ...(typeof raw.environmentId === "string" && raw.environmentId.trim()
@@ -17,12 +56,5 @@ export const Route = createFileRoute("/settings/harness")({
       ? { instanceId: ProviderInstanceId.make(raw.instanceId) }
       : {}),
   }),
-  beforeLoad: ({ search }) => {
-    const carried: Record<string, string> = {};
-    for (const key of ["environmentId", "instanceId", "machine", "project", "checkout"] as const) {
-      const value = (search as Record<string, unknown>)[key];
-      if (typeof value === "string" && value.length > 0) carried[key] = value;
-    }
-    throw redirect({ to: "/settings/providers", search: carried, replace: true });
-  },
+  component: SettingsHarnessRoute,
 });

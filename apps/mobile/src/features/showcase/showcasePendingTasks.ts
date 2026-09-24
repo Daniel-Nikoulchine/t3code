@@ -1,7 +1,6 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import {
   CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   MessageId,
   ProviderInstanceId,
@@ -50,7 +49,6 @@ export function buildShowcasePendingTasks(
         attachments: [],
         modelSelection: project.defaultModelSelection ?? FALLBACK_MODEL_SELECTION,
         runtimeMode: DEFAULT_RUNTIME_MODE,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         creation: {
           projectId: project.id,
           projectTitle: project.title,

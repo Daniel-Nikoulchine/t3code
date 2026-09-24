@@ -7,7 +7,6 @@
 import {
   ApprovalRequestId,
   type HermesSettings,
-  EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -18,7 +17,6 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -31,9 +29,7 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -54,6 +50,14 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  makeEventStamper,
+  makeThreadLockRegistry,
+  requireScaffoldSession,
+  settlePendingApprovalsAsCancelled,
+  stopScaffoldSession,
+  makeExtensionFailureMapper,
+} from "../acp/AcpAdapterScaffold.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -73,6 +77,10 @@ import {
 } from "../acp/HermesAcpSupport.ts";
 import { type HermesAdapterShape } from "../Services/HermesAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  selectSessionFirstAutoApprovedPermissionOption,
+  selectSessionFirstPermissionOptionId,
+} from "./permissionOptionSelection.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("hermes");
@@ -154,19 +162,6 @@ interface HermesSessionContext {
    * `undefined` when Hermes reported no catalog (legacy pass-through).
    */
   readonly advertisedModels: ReadonlySet<string> | undefined;
-}
-
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingApprovals.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -275,44 +270,14 @@ function applyRequestedSessionConfiguration<E>(input: {
 export function selectHermesAutoApprovedPermissionOption(
   request: EffectAcpSchema.RequestPermissionRequest,
 ): string | undefined {
-  const allowSessionOption = request.options.find((option) => option.optionId === "allow_session");
-  if (allowSessionOption?.optionId.trim()) {
-    return allowSessionOption.optionId.trim();
-  }
-
-  const allowOnceOption =
-    request.options.find((option) => option.optionId === "allow_once") ??
-    request.options.find((option) => option.kind === "allow_once");
-  if (typeof allowOnceOption?.optionId === "string" && allowOnceOption.optionId.trim()) {
-    return allowOnceOption.optionId.trim();
-  }
-
-  return undefined;
+  return selectSessionFirstAutoApprovedPermissionOption(request);
 }
 
 export function selectHermesPermissionOptionId(
   request: EffectAcpSchema.RequestPermissionRequest,
   decision: Exclude<ProviderApprovalDecision, "cancel">,
 ): string | undefined {
-  const preferredIds =
-    decision === "acceptForSession"
-      ? ["allow_session", "allow_always"]
-      : decision === "accept"
-        ? ["allow_once"]
-        : ["deny"];
-  for (const id of preferredIds) {
-    const exact = request.options.find((option) => option.optionId === id);
-    if (exact?.optionId.trim()) return exact.optionId.trim();
-  }
-  const fallbackKind =
-    decision === "acceptForSession"
-      ? "allow_always"
-      : decision === "accept"
-        ? "allow_once"
-        : "reject_once";
-  return (
-    request.options.find((option) => option.kind === fallbackKind)?.optionId.trim() || undefined
-  );
+  return selectSessionFirstPermissionOptionId(request, decision);
 }
 
 function permissionOutcome(
@@ -354,57 +319,24 @@ export function makeHermesAdapter(
     const makeAcpNativeLoggers = yield* makeAcpNativeLoggerFactory();
 
     const sessions = new Map<ThreadId, HermesSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "crypto/randomUUIDv4",
-            detail: "Failed to generate Hermes runtime identifier.",
-            cause,
-          }),
-      ),
+    const locks = yield* makeThreadLockRegistry;
+    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+      locks.withThreadLock(threadId, effect);
+    const stamper = yield* makeEventStamper({
+      provider: PROVIDER,
+      detail: "Failed to generate Hermes runtime identifier.",
+    });
+    const nowIso = stamper.nowIso;
+    const randomUUIDv4 = stamper.randomUUIDv4;
+    const makeEventStamp = stamper.makeEventStamp;
+    const mapExtensionFailure = makeExtensionFailureMapper(
+      "Failed to process Hermes ACP extension event.",
     );
-    const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
-    const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const mapExtensionFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new EffectAcpErrors.AcpTransportError({
-              detail: "Failed to process Hermes ACP extension event.",
-              cause,
-            }),
-        ),
-      );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (
       threadId: ThreadId,
@@ -465,42 +397,16 @@ export function makeHermesAdapter(
         );
       });
 
-    const requireSession = (
-      threadId: ThreadId,
-    ): Effect.Effect<HermesSessionContext, ProviderAdapterSessionNotFoundError> => {
-      const ctx = sessions.get(threadId);
-      if (!ctx || ctx.stopped) {
-        return Effect.fail(
-          new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
-        );
-      }
-      return Effect.succeed(ctx);
-    };
+    const requireSession = requireScaffoldSession(sessions, PROVIDER);
 
     const stopSessionInternal = (ctx: HermesSessionContext) =>
-      Effect.gen(function* () {
-        if (ctx.stopped) return;
-        ctx.stopped = true;
-        yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        if (ctx.notificationFiber) {
-          yield* Fiber.interrupt(ctx.notificationFiber);
-        }
-        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
-        sessions.delete(ctx.threadId);
-        // Release the per-thread semaphore so starting and stopping sessions
-        // does not grow threadLocksRef for the adapter's lifetime.
-        yield* SynchronizedRef.update(threadLocksRef, (current) => {
-          const next = new Map(current);
-          next.delete(ctx.threadId);
-          return next;
-        });
-        yield* offerRuntimeEvent({
-          type: "session.exited",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
-        });
+      stopScaffoldSession({
+        ctx,
+        sessions,
+        releaseThreadLock: locks.releaseThreadLock,
+        offerRuntimeEvent,
+        makeEventStamp,
+        provider: PROVIDER,
       });
 
     const startSession: HermesAdapterShape["startSession"] = (input) =>

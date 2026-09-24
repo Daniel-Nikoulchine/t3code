@@ -5,7 +5,6 @@ import {
   type ModelSelection,
   type OrchestrationMessageContext,
   type ProjectId,
-  type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -35,7 +34,6 @@ export interface ProjectThreadStartTurnSpec {
   readonly uploadedAttachments: ReadonlyArray<UploadedMobileAttachment>;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode;
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -65,14 +63,12 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     modelSelection: spec.modelSelection,
     titleSeed: title,
     runtimeMode: spec.runtimeMode,
-    interactionMode: spec.interactionMode,
     bootstrap: {
       createThread: {
         projectId: spec.projectId,
         title,
         modelSelection: spec.modelSelection,
         runtimeMode: spec.runtimeMode,
-        interactionMode: spec.interactionMode,
         branch: spec.branch,
         worktreePath: isWorktree ? null : spec.worktreePath,
         createdAt: spec.createdAt,

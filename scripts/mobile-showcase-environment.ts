@@ -18,7 +18,6 @@ const PROJECTOR_NAMES = [
   "projection.projects",
   "projection.threads",
   "projection.thread-messages",
-  "projection.thread-proposed-plans",
   "projection.thread-activities",
   "projection.thread-sessions",
   "projection.thread-turns",
@@ -206,7 +205,6 @@ export const SHOWCASE_THREADS = [
     title: "Make boot logs oddly beautiful",
     branch: "feat/beautiful-boot",
     minutesAgo: 34,
-    state: "plan" as const,
     request:
       "Design a clearer boot timeline that remains useful over serial and never hides kernel detail.",
     response:
@@ -347,7 +345,7 @@ function insertThread(
     readonly title: string;
     readonly branch: string;
     readonly minutesAgo: number;
-    readonly state?: "working" | "approval" | "plan";
+    readonly state?: "working" | "approval";
     readonly settled?: boolean;
     readonly snoozeMinutes?: number;
     readonly workspaceRoot: string;
@@ -367,11 +365,11 @@ function insertThread(
   database
     .prepare(
       `INSERT INTO projection_threads (
-        thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+        thread_id, project_id, title, model_selection_json, runtime_mode,
         branch, worktree_path, latest_turn_id, latest_user_message_at, pending_approval_count,
-        pending_user_input_count, has_actionable_proposed_plan, created_at, updated_at,
+        pending_user_input_count, created_at, updated_at,
         archived_at, deleted_at, settled_override, settled_at, snoozed_until, snoozed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
     )
     .run(
       input.id,
@@ -379,13 +377,11 @@ function insertThread(
       input.title,
       MODEL_SELECTION,
       "full-access",
-      input.state === "plan" ? "plan" : "default",
       input.branch,
       input.workspaceRoot,
       turnId,
       minutesBefore(now, input.minutesAgo + 1),
       input.state === "approval" ? 1 : 0,
-      input.state === "plan" ? 1 : 0,
       minutesBefore(now, input.minutesAgo + 120),
       updatedAt,
       input.settled ? "settled" : null,
@@ -398,8 +394,8 @@ function insertThread(
       `INSERT INTO projection_turns (
         thread_id, turn_id, pending_message_id, assistant_message_id, state, requested_at,
         started_at, completed_at, checkpoint_turn_count, checkpoint_ref, checkpoint_status,
-        checkpoint_files_json, source_proposed_plan_thread_id, source_proposed_plan_id
-      ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL, '[]', NULL, NULL)`,
+        checkpoint_files_json
+      ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, NULL, '[]')`,
     )
     .run(
       input.id,
@@ -422,7 +418,6 @@ function insertThread(
 
 const SEEDED_PROJECTION_TABLES = [
   "projection_pending_approvals",
-  "projection_thread_proposed_plans",
   "projection_thread_activities",
   "projection_thread_messages",
   "projection_thread_sessions",

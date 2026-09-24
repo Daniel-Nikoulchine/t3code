@@ -1,6 +1,5 @@
 import {
   ApprovalRequestId,
-  DEFAULT_MODEL,
   EventId,
   ProviderDriverKind,
   ProviderItemId,
@@ -8,7 +7,6 @@ import {
   type ProviderApprovalDecision,
   type ProviderApprovalOption,
   type ProviderEvent,
-  type ProviderInteractionMode,
   type ProviderRequestKind,
   type ProviderSession,
   type ProviderTurnStartResult,
@@ -39,10 +37,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
-import {
-  buildCodexDeveloperInstructions,
-  type T3CodeToolAvailability,
-} from "../CodexDeveloperInstructions.ts";
+import { type T3CodeToolAvailability } from "../CodexDeveloperInstructions.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -192,7 +187,6 @@ export interface CodexSessionRuntimeSendTurnInput {
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
-  readonly interactionMode?: ProviderInteractionMode;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -581,28 +575,12 @@ function runtimeModeToTurnSandboxPolicy(
 }
 
 function buildCodexCollaborationMode(input: {
-  readonly interactionMode?: ProviderInteractionMode;
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
-  if (input.interactionMode === undefined) {
-    return undefined;
-  }
-  const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL;
-  const reasoningEffort = input.effort ?? "medium";
-  return {
-    mode: input.interactionMode,
-    settings: {
-      model,
-      reasoning_effort: reasoningEffort,
-      developer_instructions: buildCodexDeveloperInstructions(
-        input.interactionMode,
-        { model, reasoningEffort },
-        input.browserToolsAvailable ?? true,
-      ),
-    },
-  };
+  void input;
+  return undefined;
 }
 
 export function buildTurnStartParams(input: {
@@ -616,7 +594,6 @@ export function buildTurnStartParams(input: {
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
-  readonly interactionMode?: ProviderInteractionMode;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean | T3CodeToolAvailability;
 }): Effect.Effect<
@@ -636,7 +613,6 @@ export function buildTurnStartParams(input: {
 
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   const collaborationMode = buildCodexCollaborationMode({
-    ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     browserToolsAvailable: input.browserToolsAvailable ?? true,
@@ -2454,7 +2430,6 @@ export const makeCodexSessionRuntime = (
             ...(normalizedModel ? { model: normalizedModel } : {}),
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
-            ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
             // Derived from the session's own credential rather than the
             // setting, so the prompt describes the tools this turn actually
             // has even if the setting changed after the session started.

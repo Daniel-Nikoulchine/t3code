@@ -16,12 +16,9 @@
  */
 import type { ServerProviderSkill, ZcodeSettings } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { ChildProcess } from "effect/unstable/process";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
-import { spawnAndCollect } from "../providerSnapshot.ts";
+import { runCliJsonProbe } from "../cliProbe.ts";
 
 const ZCODE_SKILLS_PROBE_TIMEOUT_MS = 8_000;
 
@@ -103,50 +100,19 @@ export const discoverZcodeSkills = Effect.fn("discoverZcodeSkills")(function* (
   cwd?: string,
 ) {
   const command = zcodeSettings.binaryPath || "zcode";
-  const listResult = yield* Effect.gen(function* () {
-    const spawnCommand = yield* resolveSpawnCommand(command, ["skills", "list", "--json"], {
-      env: environment,
-    });
-    return yield* spawnAndCollect(
-      command,
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        ...(cwd ? { cwd } : {}),
-        env: environment,
-        shell: spawnCommand.shell,
+  return yield* runCliJsonProbe({
+    command,
+    args: ["skills", "list", "--json"],
+    environment,
+    ...(cwd ? { cwd } : {}),
+    timeoutMs: ZCODE_SKILLS_PROBE_TIMEOUT_MS,
+    makeError: (input) =>
+      new ZcodeSkillsProbeError({
+        stage: input.stage,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+        ...(input.cause !== undefined ? { cause: input.cause } : {}),
       }),
-    );
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ZcodeSkillsProbeError({
-          stage: "spawn",
-          ...(cwd ? { cwd } : {}),
-          cause,
-        }),
-    ),
-    Effect.timeoutOption(ZCODE_SKILLS_PROBE_TIMEOUT_MS),
-  );
-
-  if (Option.isNone(listResult)) {
-    return yield* new ZcodeSkillsProbeError({
-      stage: "timeout",
-      ...(cwd ? { cwd } : {}),
-    });
-  }
-  const output = listResult.value;
-  if (output.code !== 0) {
-    return yield* new ZcodeSkillsProbeError({
-      stage: "exit",
-      ...(cwd ? { cwd } : {}),
-      exitCode: output.code,
-    });
-  }
-  const skills = decodeZcodeSkillsListSkills(output.stdout);
-  if (!skills) {
-    return yield* new ZcodeSkillsProbeError({
-      stage: "decode",
-      ...(cwd ? { cwd } : {}),
-    });
-  }
-  return skills;
+    decode: decodeZcodeSkillsListSkills,
+  });
 });

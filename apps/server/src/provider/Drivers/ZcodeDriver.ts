@@ -29,7 +29,7 @@ import {
   checkZcodeProviderStatus,
   enrichZcodeSnapshot,
 } from "../Layers/ZcodeProvider.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -39,15 +39,9 @@ import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import { discoverZcodeSkills } from "./ZcodeSkills.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
+  resolveDriverMaintenance,
 } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 
 const decodeZcodeSettings = Schema.decodeSync(ZcodeSettings);
 
@@ -76,7 +70,15 @@ export const ZcodeDriver: ProviderDriver<ZcodeSettings, ZcodeDriverEnv> = {
   },
   configSchema: ZcodeSettings,
   defaultConfig: (): ZcodeSettings => decodeZcodeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -96,18 +98,15 @@ export const ZcodeDriver: ProviderDriver<ZcodeSettings, ZcodeDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend: undefined,
+        nativeFallback,
       });
       const effectiveConfig = { ...config, enabled } satisfies ZcodeSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makeZcodeAdapter(effectiveConfig, {
         environment: processEnv,
@@ -123,38 +122,19 @@ export const ZcodeDriver: ProviderDriver<ZcodeSettings, ZcodeDriverEnv> = {
         Effect.provideService(Path.Path, path),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<ZcodeSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "ZCode snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance,
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialZcodeProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialZcodeProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
-              enrichZcodeSnapshot({
-                snapshot: currentSnapshot,
-                maintenanceCapabilities,
-                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                publishSnapshot,
-                httpClient,
-              }),
-            ),
-          ),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build ZCode snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichZcodeSnapshot,
+        httpClient,
+      });
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot

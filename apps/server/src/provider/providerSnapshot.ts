@@ -17,6 +17,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { readCustomModelEntries } from "@t3tools/shared/model";
 import { isWindowsCommandNotFound } from "../processRunner.ts";
+import { stripBackendBucketPrefix } from "./ModelBackendEnvironment.ts";
 import { createProviderVersionAdvisory } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 
@@ -63,10 +64,14 @@ export interface ProviderProbeResult {
 export interface ServerProviderPresentation {
   readonly displayName: string;
   readonly badgeLabel?: string;
-  readonly showInteractionModeToggle?: boolean;
   readonly reportsContextWindow?: boolean;
   readonly requiresNewThreadForModelChange?: boolean;
   readonly supportsConversationRollback?: boolean;
+  /** In-app sign-in support (OAuth-style login button in settings). */
+  readonly setup?: {
+    readonly canAuthenticate: boolean;
+    readonly canInstall: boolean;
+  };
 }
 
 export type ServerProviderDraft = Omit<ServerProvider, "instanceId" | "driver">;
@@ -137,10 +142,28 @@ export function providerModelsFromSettings(
       continue;
     }
     seen.add(entry.slug);
+    // Backend-wired harnesses inject slugs as `t3-backend/<slug>` (Kilo, Pi).
+    // That bucket is T3's harness side, not a model provider — strip it from
+    // the display name and surface any nested upstream as the subtitle. The
+    // slug itself keeps the full path so routing still resolves. Stale
+    // double prefixes (`t3-backend/t3-backend/<slug>`) strip fully so the
+    // bucket never becomes its own subtitle.
+    const isBackendBucket = entry.slug.startsWith("t3-backend/");
+    const displaySlug = isBackendBucket ? stripBackendBucketPrefix(entry.slug) : entry.slug;
+    const upstreamSlash = displaySlug.indexOf("/");
+    const subProvider =
+      isBackendBucket && upstreamSlash > 0 ? displaySlug.slice(0, upstreamSlash) : undefined;
+    const name =
+      entry.name === entry.slug
+        ? isBackendBucket && upstreamSlash > 0
+          ? displaySlug.slice(upstreamSlash + 1)
+          : displaySlug
+        : entry.name;
     customEntries.push({
       slug: entry.slug,
-      name: entry.name,
+      name,
       isCustom: true,
+      ...(subProvider ? { subProvider } : {}),
       capabilities: entry.capabilities ?? customModelCapabilities,
     });
   }
@@ -216,13 +239,11 @@ export function buildServerProvider(input: {
     : undefined;
   return {
     displayName: input.presentation.displayName,
+    ...(input.presentation.setup ? { setup: { ...input.presentation.setup } } : {}),
     ...(typeof input.presentation.supportsConversationRollback === "boolean"
       ? { supportsConversationRollback: input.presentation.supportsConversationRollback }
       : {}),
     ...(input.presentation.badgeLabel ? { badgeLabel: input.presentation.badgeLabel } : {}),
-    ...(typeof input.presentation.showInteractionModeToggle === "boolean"
-      ? { showInteractionModeToggle: input.presentation.showInteractionModeToggle }
-      : {}),
     ...(typeof input.presentation.reportsContextWindow === "boolean"
       ? { reportsContextWindow: input.presentation.reportsContextWindow }
       : {}),

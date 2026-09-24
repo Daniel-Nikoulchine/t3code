@@ -5,7 +5,7 @@ import type {
   ModelProxyProtocol,
   ProviderInstanceConfig,
 } from "@t3tools/contracts";
-import { ModelCredentialId, T3_ROUTER_CONNECTION_ID } from "@t3tools/contracts";
+import { ModelCredentialId, ProviderDriverKind, T3_ROUTER_CONNECTION_ID } from "@t3tools/contracts";
 
 /**
  * Pure patches for the named model-backend connections map.
@@ -126,12 +126,14 @@ export function slugifyBackendConnectionId(label: string): string {
  * otherwise the proposal with a `-2`/`-3`/… suffix (base truncated so the
  * result still fits 64 chars). The add-dialog runs every save through here,
  * so a collision silently becomes a suffixed id instead of overwriting.
- * The built-in router's id is permanently taken — the registry injects it
- * when unclaimed, so a user entry must never claim it.
+ * The built-in ids are permanently taken — the registry injects the router
+ * when unclaimed and harnesses address the backend bucket directly, so a
+ * user entry must never claim either.
  */
 export function allocateBackendConnectionId(desired: string, existing: Iterable<string>): string {
   const taken = new Set(existing);
   taken.add(T3_ROUTER_CONNECTION_ID);
+  taken.add("t3-backend");
   const trimmed = desired.trim();
   const base =
     trimmed.length > 0 &&
@@ -152,7 +154,9 @@ export function allocateBackendConnectionId(desired: string, existing: Iterable<
  * add-instance dialog). Returns the error text, or `null` when saveable.
  * Collisions are NOT an error — `allocateBackendConnectionId` suffixes them
  * on save — so this only rejects empty/overlong/off-pattern input and the
- * reserved built-in router id, which no user entry may claim.
+ * reserved built-in ids, which no user entry may claim (`t3-router` is the
+ * routing proxy, `t3-backend` the harness-side bucket harnesses address
+ * backend models through — either would surface the bucket as a provider).
  */
 export function validateBackendConnectionId(id: string): string | null {
   const trimmed = id.trim();
@@ -165,6 +169,9 @@ export function validateBackendConnectionId(id: string): string | null {
   }
   if (trimmed === T3_ROUTER_CONNECTION_ID) {
     return '"t3-router" is reserved for the built-in routing.';
+  }
+  if (trimmed.toLowerCase() === "t3-backend") {
+    return '"t3-backend" is reserved for the harness backend bucket.';
   }
   return null;
 }
@@ -246,4 +253,71 @@ export function countConnectionReferences(
     }
   }
   return count;
+}
+
+/**
+ * Brand icon for a named backend connection row.
+ *
+ * Connections are user entries with no stored driver — only `baseUrl`,
+ * `displayName`, the map key, an optional Codex-OAuth link, and the stored
+ * credential's vendor. Rendering them with `driverKind={null}` falls back to
+ * bare initials ("OG", "CA"), which is what the Provider tab showed for
+ * OpenCode Go and the ChatGPT (Codex OAuth) endpoint.
+ *
+ * Infer the closest harness driver that owns a brand glyph so those rows
+ * render the same icon as the pick dialog (`PROVIDER_PRESET_ICONS`) and the
+ * harness cards (`PROVIDER_ICON_BY_PROVIDER`). Returns `null` for genuinely
+ * custom endpoints so they keep the initials fallback. Pure so list rows,
+ * detail rows, and unit tests decide identically.
+ */
+export function inferBackendConnectionDriverKind(input: {
+  readonly connectionId: string;
+  readonly connection: Pick<ModelProxyConfig, "baseUrl" | "displayName" | "codexAccountInstanceId">;
+  readonly credentialVendor?: string | undefined;
+}): ProviderDriverKind | null {
+  if (String(input.connection.codexAccountInstanceId ?? "").trim().length > 0) {
+    return ProviderDriverKind.make("codex");
+  }
+  const baseUrl = String(input.connection.baseUrl ?? "").toLowerCase();
+  const displayName = String(input.connection.displayName ?? "").toLowerCase();
+  const connectionId = String(input.connectionId ?? "").toLowerCase();
+  const vendor = String(input.credentialVendor ?? "").toLowerCase();
+  const haystack = `${baseUrl} ${displayName} ${connectionId} ${vendor}`;
+
+  if (haystack.includes("opencode")) return ProviderDriverKind.make("opencode");
+  if (
+    haystack.includes("chatgpt") ||
+    haystack.includes("codex") ||
+    haystack.includes("api.openai.com") ||
+    haystack.includes("openai")
+  ) {
+    return ProviderDriverKind.make("codex");
+  }
+  if (haystack.includes("claude") || haystack.includes("anthropic")) {
+    return ProviderDriverKind.make("claudeAgent");
+  }
+  if (
+    haystack.includes("api.x.ai") ||
+    haystack.includes("x.ai") ||
+    haystack.includes("grok") ||
+    haystack.includes("xai")
+  ) {
+    return ProviderDriverKind.make("grok");
+  }
+  if (haystack.includes("deepseek")) return ProviderDriverKind.make("deepseek");
+  if (haystack.includes("cursor")) return ProviderDriverKind.make("cursor");
+  if (haystack.includes("copilot")) return ProviderDriverKind.make("copilot");
+  if (haystack.includes("openclaw")) return ProviderDriverKind.make("openclaw");
+  if (haystack.includes("droid")) return ProviderDriverKind.make("droid");
+  if (haystack.includes("cline")) return ProviderDriverKind.make("cline");
+  if (haystack.includes("kilo")) return ProviderDriverKind.make("kilo");
+  if (haystack.includes("minimax")) return ProviderDriverKind.make("minimax");
+  if (haystack.includes("antigravity")) return ProviderDriverKind.make("antigravity");
+  if (haystack.includes("devin")) return ProviderDriverKind.make("devin");
+  if (haystack.includes("hermes")) return ProviderDriverKind.make("hermes");
+  if (haystack.includes("zcode")) return ProviderDriverKind.make("zcode");
+  if (haystack.includes("freebuff") || haystack.includes("codebuff")) {
+    return ProviderDriverKind.make("freebuff");
+  }
+  return null;
 }

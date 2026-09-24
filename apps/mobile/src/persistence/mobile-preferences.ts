@@ -29,22 +29,11 @@ export interface Preferences {
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
-  readonly collapsedProjectGroups?: readonly string[];
   /** What the Return key does in the composer on a hardware keyboard. iOS only. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
   /** @deprecated Kept temporarily so older OTA bundles retain the selected mode. */
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
-  /**
-   * Device-local mirror of the web `legacySidebarEnabled` setting. Mobile has
-   * no client-settings sync, so the legacy grouped thread list is opted into
-   * per device. Deliberately a fresh key (was `threadListV2Enabled`, an
-   * opt-out): sanitizing drops the old key, so every device resets to the
-   * default flat list — see `resolveThreadListV2Enabled`.
-   */
-  readonly legacyThreadListEnabled?: boolean;
-  /** Device-local counterpart of desktop's `planModeEnabled` legacy flag. */
-  readonly planModeEnabled?: boolean;
   /** Fresh keys reset both shelves to collapsed when users update. */
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
@@ -101,12 +90,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     codeFontSize?: number | null;
     codeWordBreak?: boolean;
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
-    collapsedProjectGroups?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
-    legacyThreadListEnabled?: boolean;
-    planModeEnabled?: boolean;
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
   } = {};
@@ -158,11 +144,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
       (account): account is string => typeof account === "string",
     );
   }
-  if (Array.isArray(parsed.collapsedProjectGroups)) {
-    preferences.collapsedProjectGroups = parsed.collapsedProjectGroups.filter(
-      (key): key is string => typeof key === "string",
-    );
-  }
   if (parsed.composerEnterBehavior === "send" || parsed.composerEnterBehavior === "newline") {
     preferences.composerEnterBehavior = parsed.composerEnterBehavior;
   }
@@ -175,12 +156,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     parsed.projectGroupingMode === "separate"
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
-  }
-  if (typeof parsed.legacyThreadListEnabled === "boolean") {
-    preferences.legacyThreadListEnabled = parsed.legacyThreadListEnabled;
-  }
-  if (typeof parsed.planModeEnabled === "boolean") {
-    preferences.planModeEnabled = parsed.planModeEnabled;
   }
   if (typeof parsed.threadListSettledShelfExpanded === "boolean") {
     preferences.threadListSettledShelfExpanded = parsed.threadListSettledShelfExpanded;

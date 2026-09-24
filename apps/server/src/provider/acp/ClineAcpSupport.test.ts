@@ -9,7 +9,6 @@ import {
   buildClineAcpSpawnInput,
   CLINE_AUTH_METHOD_ID,
   clineAcpPermissionArgs,
-  resolveClineModeId,
   resolveClineModelId,
 } from "./ClineAcpSupport.ts";
 
@@ -69,15 +68,6 @@ describe("buildClineAcpSpawnInput", () => {
   });
 });
 
-describe("resolveClineModeId", () => {
-  it("maps T3 interaction modes onto Cline plan/act", () => {
-    expect(resolveClineModeId("plan")).toBe("plan");
-    expect(resolveClineModeId("default")).toBe("act");
-    expect(resolveClineModeId(undefined)).toBeUndefined();
-    expect(resolveClineModeId(null)).toBeUndefined();
-  });
-});
-
 describe("applyClineAcpModelSelection", () => {
   const makeRecordingRuntime = () => {
     const modelCalls: Array<string> = [];
@@ -133,7 +123,7 @@ describe("applyClineAcpModelSelection", () => {
 });
 
 describe("applyClineAcpModeSelection", () => {
-  it.effect("applies plan and act through setMode", () =>
+  it.effect("always applies act through setMode", () =>
     Effect.gen(function* () {
       const modeCalls: Array<string> = [];
       const runtime = {
@@ -145,34 +135,9 @@ describe("applyClineAcpModeSelection", () => {
       };
       yield* applyClineAcpModeSelection({
         runtime,
-        interactionMode: "plan",
         mapError: (cause) => cause.message,
       });
-      yield* applyClineAcpModeSelection({
-        runtime,
-        interactionMode: "default",
-        mapError: (cause) => cause.message,
-      });
-      expect(modeCalls).toEqual(["plan", "act"]);
-    }),
-  );
-
-  it.effect("skips setMode without an interaction mode", () =>
-    Effect.gen(function* () {
-      const modeCalls: Array<string> = [];
-      const runtime = {
-        setMode: (modeId: string) =>
-          Effect.gen(function* () {
-            yield* Effect.sync(() => modeCalls.push(modeId));
-            return {};
-          }),
-      };
-      yield* applyClineAcpModeSelection({
-        runtime,
-        interactionMode: undefined,
-        mapError: (cause) => cause.message,
-      });
-      expect(modeCalls).toEqual([]);
+      expect(modeCalls).toEqual(["act"]);
     }),
   );
 });

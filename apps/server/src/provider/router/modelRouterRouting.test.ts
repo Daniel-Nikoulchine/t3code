@@ -19,6 +19,7 @@ import {
 } from "./modelRouterPort.ts";
 import {
   resolveModelRoute,
+  resolveOpencodeGoSessionHeader,
   routedModelIds,
   vendorProtocol,
   type ModelRouterSnapshot,
@@ -32,13 +33,58 @@ const makeSnapshot = (input: {
   routes: unknown;
   connections?: unknown;
   credentials?: unknown;
+  codexAccounts?: ModelRouterSnapshot["codexAccounts"];
 }): ModelRouterSnapshot => ({
   routes: decodeRoutes(input.routes),
   connections: decodeConnections(input.connections ?? {}),
   credentials: decodeCredentials(input.credentials ?? {}),
+  codexAccounts: input.codexAccounts ?? {},
 });
 
 describe("resolveModelRoute", () => {
+  it("resolves a Codex OAuth account route keyless, whatever credentials say", () => {
+    const snapshot = makeSnapshot({
+      routes: { "gpt-5.6-luna": { target: { kind: "connection", connectionId: "openai-oauth" } } },
+      connections: {
+        "openai-oauth": {
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountInstanceId: "codex",
+          apiKeyEnv: "IGNORED",
+        },
+      },
+      codexAccounts: { codex: { binaryPath: "codex" } },
+    });
+    const resolved = resolveModelRoute(snapshot, "gpt-5.6-luna", "openai", {
+      IGNORED: "sk-should-not-leak",
+    } as NodeJS.ProcessEnv);
+    expect(resolved._tag).toBe("Found");
+    if (resolved._tag === "Found") {
+      expect(resolved.upstream).toEqual({
+        kind: "codex-oauth",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        apiKey: undefined,
+        codexAccountInstanceId: "codex",
+        protocol: "openai",
+        upstreamModel: "gpt-5.6-luna",
+        responsesUpstream: true,
+      });
+    }
+  });
+
+  it("leaves a Codex OAuth route unresolved when the account instance is gone", () => {
+    const snapshot = makeSnapshot({
+      routes: { "gpt-5.6-luna": { target: { kind: "connection", connectionId: "openai-oauth" } } },
+      connections: {
+        "openai-oauth": {
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountInstanceId: "ghost",
+        },
+      },
+      codexAccounts: { codex: { binaryPath: "codex" } },
+    });
+    expect(resolveModelRoute(snapshot, "gpt-5.6-luna", "openai")._tag).toBe("UnresolvedTarget");
+  });
+
   it("resolves a connection target with a credential key", () => {
     const snapshot = makeSnapshot({
       routes: { "gpt-x": { target: { kind: "connection", connectionId: "main" } } },
@@ -54,6 +100,7 @@ describe("resolveModelRoute", () => {
         apiKey: "sk-live-1",
         protocol: "openai",
         upstreamModel: "gpt-x",
+        responsesUpstream: false,
       });
     }
   });
@@ -101,6 +148,7 @@ describe("resolveModelRoute", () => {
       apiKey: "sk-ds",
       protocol: "openai",
       upstreamModel: "m",
+      responsesUpstream: false,
     });
   });
 
@@ -150,6 +198,23 @@ describe("resolveModelRoute", () => {
     });
     const resolved = resolveModelRoute(snapshot, "fast", "openai");
     expect(resolved._tag === "Found" && resolved.upstream.upstreamModel).toBe("gpt-5.2-mini");
+  });
+
+  it("carries the upstreamResponses flag, defaulting to false", () => {
+    const snapshot = makeSnapshot({
+      routes: {
+        chatty: { target: { kind: "connection", connectionId: "main" } },
+        talky: {
+          target: { kind: "connection", connectionId: "main" },
+          upstreamResponses: true,
+        },
+      },
+      connections: { main: { baseUrl: "http://127.0.0.1:9001/v1" } },
+    });
+    const plain = resolveModelRoute(snapshot, "chatty", "openai");
+    expect(plain._tag === "Found" && plain.upstream.responsesUpstream).toBe(false);
+    const forced = resolveModelRoute(snapshot, "talky", "openai");
+    expect(forced._tag === "Found" && forced.upstream.responsesUpstream).toBe(true);
   });
 
   it("translates only when the connection declares just the other protocol", () => {
@@ -247,5 +312,39 @@ describe("deriveRegistryConnections", () => {
     } as ServerSettings;
     const connections = deriveRegistryConnections(settings, "http://127.0.0.1:21774");
     expect(connections[T3_ROUTER_CONNECTION_ID]?.baseUrl).toBe("http://mine-actually/v1");
+  });
+});
+
+describe("resolveOpencodeGoSessionHeader", () => {
+  const GO = "https://opencode.ai/zen/go/v1";
+  it("passes a harness-supplied session id through on go targets", () => {
+    expect(
+      resolveOpencodeGoSessionHeader({
+        baseUrl: GO,
+        routeKey: "opencode-go/kimi-k3",
+        inboundSessionId: "sess-1",
+      }),
+    ).toBe("sess-1");
+  });
+  it("falls back to a stable per-route id without one", () => {
+    expect(
+      resolveOpencodeGoSessionHeader({
+        baseUrl: GO,
+        routeKey: "opencode-go/kimi-k3",
+        inboundSessionId: undefined,
+      }),
+    ).toBe("t3-router-opencode-go/kimi-k3");
+    expect(
+      resolveOpencodeGoSessionHeader({ baseUrl: GO, routeKey: "x", inboundSessionId: "" }),
+    ).toBe("t3-router-x");
+  });
+  it("stays absent for any other upstream", () => {
+    expect(
+      resolveOpencodeGoSessionHeader({
+        baseUrl: "https://api.openai.com/v1",
+        routeKey: "x",
+        inboundSessionId: "sess-1",
+      }),
+    ).toBeUndefined();
   });
 });

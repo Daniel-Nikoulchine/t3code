@@ -1,4 +1,4 @@
-import { KiloSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { KiloSettings, ProviderDriverKind, type ModelBackendConfig } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,7 +19,7 @@ import {
   enrichKiloSnapshot,
 } from "../Layers/KiloProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -27,22 +27,80 @@ import {
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
+  BACKEND_BUCKET_PROVIDER_ID,
+  isRouterBackend,
+  resolveModelBackendEnvironment,
+  resolveBackendModelSlugs,
+} from "../ModelBackendEnvironment.ts";
+import { mergeOpenCodeBackendConfigContent } from "../opencodeRuntime.ts";
+import {
   makePackageManagedProviderMaintenanceResolver,
   normalizeCommandPath,
-  resolveProviderMaintenanceCapabilitiesEffect,
+  resolveDriverMaintenance,
 } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 import { probeKiloSkills } from "./KiloSkills.ts";
 const decodeKiloSettings = Schema.decodeSync(KiloSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("kilo");
+
+/** Provider id T3 owns inside the Kilo config; models are `t3-backend/<slug>`. */
+export const KILO_BACKEND_PROVIDER_ID = BACKEND_BUCKET_PROVIDER_ID;
+
+/**
+ * Pure backend wiring for the Kilo CLI. Kilo reads OpenCode-style provider
+ * blocks from `KILO_CONFIG_CONTENT`, so a linked backend injects a
+ * `t3-backend` entry there and lists its slugs as `t3-backend/<slug>`
+ * custom models. A `t3-router` backend carries no models of its own, its
+ * slugs come from the router route keys.
+ */
+export function resolveKiloBackendWiring(input: {
+  readonly backend: ModelBackendConfig | undefined;
+  readonly routeKeys: ReadonlyArray<string>;
+  readonly instanceEnv: NodeJS.ProcessEnv;
+  readonly baseEnv: NodeJS.ProcessEnv;
+}): {
+  readonly backendModelSlugs: ReadonlyArray<string>;
+  readonly effectiveBackend: ModelBackendConfig | undefined;
+  readonly backendEnv: NodeJS.ProcessEnv;
+  readonly backendConfigContent: string | undefined;
+  readonly backendCustomModels: ReadonlyArray<string>;
+  readonly processEnv: NodeJS.ProcessEnv;
+} {
+  const backendModelSlugs = resolveBackendModelSlugs({
+    backend: input.backend,
+    routeKeys: input.routeKeys,
+  });
+  const effectiveBackend: ModelBackendConfig | undefined =
+    input.backend !== undefined && isRouterBackend(input.backend) && backendModelSlugs.length > 0
+      ? { ...input.backend, models: [...backendModelSlugs] }
+      : input.backend;
+  const backendEnv = resolveModelBackendEnvironment(input.backend, input.baseEnv);
+  const resolvedApiKey = backendEnv.OPENAI_API_KEY ?? backendEnv.ANTHROPIC_API_KEY;
+  const backendConfigContent =
+    effectiveBackend === undefined
+      ? undefined
+      : mergeOpenCodeBackendConfigContent({
+          backend: effectiveBackend,
+          existingContent: input.instanceEnv.KILO_CONFIG_CONTENT,
+          apiKey: resolvedApiKey,
+        });
+  const backendCustomModels = backendModelSlugs.map(
+    (slug) => `${KILO_BACKEND_PROVIDER_ID}/${slug}`,
+  );
+  return {
+    backendModelSlugs,
+    effectiveBackend,
+    backendEnv,
+    backendConfigContent,
+    backendCustomModels,
+    processEnv: {
+      ...input.instanceEnv,
+      ...backendEnv,
+      ...(backendConfigContent !== undefined ? { KILO_CONFIG_CONTENT: backendConfigContent } : {}),
+    },
+  };
+}
 
 function isKiloNativeCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
@@ -77,7 +135,16 @@ export const KiloDriver: ProviderDriver<KiloSettings, KiloDriverEnv> = {
   },
   configSchema: KiloSettings,
   defaultConfig: (): KiloSettings => decodeKiloSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -86,10 +153,32 @@ export const KiloDriver: ProviderDriver<KiloSettings, KiloDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = {
-        ...mergeProviderInstanceEnvironment(environment),
-        ...resolveModelBackendEnvironment(backend, process.env),
-      };
+      // Kilo is OpenCode-based: it reads a `KILO_CONFIG_CONTENT` provider
+      // block the same way OpenCode reads `OPENCODE_CONFIG_CONTENT`. A model
+      // backend therefore injects a `t3-backend` provider entry there so its
+      // models become selectable as `t3-backend/<slug>`, alongside the env
+      // overlay the generic resolver already provides. A `t3-router` backend
+      // has no `models` of its own (the synthesized router connection omits
+      // them), so its entries come from the router's route keys.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: `Failed to read server settings for Kilo backend wiring: ${cause.message ?? String(cause)}`,
+              cause,
+            }),
+        ),
+      );
+      const wiring = resolveKiloBackendWiring({
+        backend,
+        routeKeys: Object.keys(settings.modelRouterRoutes ?? {}),
+        instanceEnv: mergeProviderInstanceEnvironment(environment),
+        baseEnv: process.env,
+      });
+      const backendModelSlugs = wiring.backendModelSlugs;
+      const processEnv = wiring.processEnv;
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -100,19 +189,27 @@ export const KiloDriver: ProviderDriver<KiloSettings, KiloDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
-        ...(backend === undefined ? {} : { backend }),
+        backend,
+        nativeFallback,
       });
-      const effectiveConfig = { ...config, enabled } satisfies KiloSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
+      // Backend models surface in the picker as `t3-backend/<slug>` (the
+      // provider id from the injected config block), so custom models carry
+      // that prefix to resolve against the router.
+      const backendCustomModels = backendModelSlugs.map(
+        (slug) => `${KILO_BACKEND_PROVIDER_ID}/${slug}`,
       );
+      const effectiveConfig = {
+        ...config,
+        enabled,
+        ...(backendCustomModels.length > 0
+          ? { customModels: [...config.customModels, ...backendCustomModels] }
+          : {}),
+      } satisfies KiloSettings;
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makeKiloAdapter(effectiveConfig, {
         environment: processEnv,
@@ -127,38 +224,19 @@ export const KiloDriver: ProviderDriver<KiloSettings, KiloDriverEnv> = {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<KiloSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "the Kilo provider snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance,
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialKiloProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialKiloProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
-              enrichKiloSnapshot({
-                snapshot: currentSnapshot,
-                maintenanceCapabilities,
-                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                publishSnapshot,
-                httpClient,
-              }),
-            ),
-          ),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build the Kilo provider snapshot.",
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichKiloSnapshot,
+        httpClient,
+      });
 
       return {
         instanceId,

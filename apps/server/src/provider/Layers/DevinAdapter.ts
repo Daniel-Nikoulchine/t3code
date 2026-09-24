@@ -7,9 +7,7 @@
 import {
   ApprovalRequestId,
   type DevinSettings,
-  EventId,
   type ProviderApprovalDecision,
-  type ProviderInteractionMode,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -20,7 +18,6 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -32,9 +29,7 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -50,6 +45,15 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { acpPermissionOutcome, mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  makeEventStamper,
+  makeThreadLockRegistry,
+  requireScaffoldSession,
+  settlePendingApprovalsAsCancelled,
+  stopScaffoldSession,
+  makeExtensionFailureMapper,
+  parseAcpResumeCursor,
+} from "../acp/AcpAdapterScaffold.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -73,11 +77,12 @@ import {
 } from "../acp/DevinAcpSupport.ts";
 import { type DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { selectAlwaysFirstAutoApprovedPermissionOption } from "./permissionOptionSelection.ts";
+import { discoverDevinSkills } from "../Drivers/DevinSkills.ts";
 import {
-  discoverDevinSkills,
-  hasDevinSkillMention,
-  rewriteDevinSkillMentions,
-} from "../Drivers/DevinSkills.ts";
+  hasSkillMentionForProvider,
+  rewriteSkillMentionsForProvider,
+} from "../Drivers/SkillProviders.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("devin");
@@ -142,19 +147,6 @@ interface DevinSessionContext {
   stopped: boolean;
 }
 
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingApprovals.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
-}
-
 function settlePendingUserInputsAsEmptyAnswers(
   pendingUserInputs: ReadonlyMap<ApprovalRequestId, PendingUserInput>,
 ): Effect.Effect<void> {
@@ -168,15 +160,8 @@ function settlePendingUserInputsAsEmptyAnswers(
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseDevinResume(raw: unknown): { sessionId: string } | undefined {
-  if (!isRecord(raw)) return undefined;
-  if (raw.schemaVersion !== DEVIN_RESUME_VERSION) return undefined;
-  if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  return { sessionId: raw.sessionId.trim() };
+  return parseAcpResumeCursor(raw, DEVIN_RESUME_VERSION);
 }
 
 function normalizeModeSearchText(mode: AcpSessionMode): string {
@@ -217,17 +202,12 @@ function isPlanMode(mode: AcpSessionMode): boolean {
 }
 
 function resolveRequestedModeId(input: {
-  readonly interactionMode: ProviderInteractionMode | undefined;
   readonly runtimeMode: RuntimeMode;
   readonly modeState: AcpSessionModeState | undefined;
 }): string | undefined {
   const modeState = input.modeState;
   if (!modeState) {
     return undefined;
-  }
-
-  if (input.interactionMode === "plan") {
-    return findModeByAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)?.id;
   }
 
   if (input.runtimeMode === "approval-required") {
@@ -250,7 +230,6 @@ function resolveRequestedModeId(input: {
 function applyRequestedSessionConfiguration<E>(input: {
   readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
   readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode | undefined;
   readonly currentModelId: string | undefined;
   readonly modelSelection:
     | {
@@ -278,7 +257,6 @@ function applyRequestedSessionConfiguration<E>(input: {
     }
 
     const requestedModeId = resolveRequestedModeId({
-      interactionMode: input.interactionMode,
       runtimeMode: input.runtimeMode,
       modeState: yield* input.runtime.getModeState,
     });
@@ -299,17 +277,7 @@ function applyRequestedSessionConfiguration<E>(input: {
 function selectAutoApprovedPermissionOption(
   request: EffectAcpSchema.RequestPermissionRequest,
 ): string | undefined {
-  const allowAlwaysOption = request.options.find((option) => option.kind === "allow_always");
-  if (typeof allowAlwaysOption?.optionId === "string" && allowAlwaysOption.optionId.trim()) {
-    return allowAlwaysOption.optionId.trim();
-  }
-
-  const allowOnceOption = request.options.find((option) => option.kind === "allow_once");
-  if (typeof allowOnceOption?.optionId === "string" && allowOnceOption.optionId.trim()) {
-    return allowOnceOption.optionId.trim();
-  }
-
-  return undefined;
+  return selectAlwaysFirstAutoApprovedPermissionOption(request);
 }
 
 export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAdapterLiveOptions) {
@@ -332,57 +300,24 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
     const makeAcpNativeLoggers = yield* makeAcpNativeLoggerFactory();
 
     const sessions = new Map<ThreadId, DevinSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "crypto/randomUUIDv4",
-            detail: "Failed to generate Devin runtime identifier.",
-            cause,
-          }),
-      ),
+    const locks = yield* makeThreadLockRegistry;
+    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+      locks.withThreadLock(threadId, effect);
+    const stamper = yield* makeEventStamper({
+      provider: PROVIDER,
+      detail: "Failed to generate Devin runtime identifier.",
+    });
+    const nowIso = stamper.nowIso;
+    const randomUUIDv4 = stamper.randomUUIDv4;
+    const makeEventStamp = stamper.makeEventStamp;
+    const mapAcpCallbackFailure = makeExtensionFailureMapper(
+      "Failed to process Devin ACP callback.",
     );
-    const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
-    const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const mapAcpCallbackFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new EffectAcpErrors.AcpTransportError({
-              detail: "Failed to process Devin ACP callback.",
-              cause,
-            }),
-        ),
-      );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (
       threadId: ThreadId,
@@ -443,17 +378,7 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
         );
       });
 
-    const requireSession = (
-      threadId: ThreadId,
-    ): Effect.Effect<DevinSessionContext, ProviderAdapterSessionNotFoundError> => {
-      const ctx = sessions.get(threadId);
-      if (!ctx || ctx.stopped) {
-        return Effect.fail(
-          new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
-        );
-      }
-      return Effect.succeed(ctx);
-    };
+    const requireSession = requireScaffoldSession(sessions, PROVIDER);
 
     const stopSessionInternal = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
@@ -655,7 +580,6 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
           const boundModelId = yield* applyRequestedSessionConfiguration({
             runtime: acp,
             runtimeMode: input.runtimeMode,
-            interactionMode: undefined,
             currentModelId: currentDevinModelIdFromSessionSetup(started.sessionSetupResult),
             modelSelection: devinModelSelection,
             mapError: ({ cause, method }) =>
@@ -847,7 +771,6 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
           const boundModelId = yield* applyRequestedSessionConfiguration({
             runtime: ctx.acp,
             runtimeMode: ctx.session.runtimeMode,
-            interactionMode: input.interactionMode,
             currentModelId:
               ctx.session.model !== undefined
                 ? resolveDevinAcpBaseModelId(ctx.session.model)
@@ -881,7 +804,7 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
           const rawPrompt = input.input?.trim() ?? "";
           if (rawPrompt) {
             let devinSkillNames = ctx.devinSkillNames;
-            if (hasDevinSkillMention(rawPrompt) && devinSkillNames === undefined) {
+            if (hasSkillMentionForProvider("devin", rawPrompt) && devinSkillNames === undefined) {
               const skills = yield* discoverDevinSkills(ctx.session.cwd, options?.environment).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
@@ -894,7 +817,7 @@ export function makeDevinAdapter(devinSettings: DevinSettings, options?: DevinAd
               ctx.devinSkillNames = devinSkillNames;
             }
             const prompt = devinSkillNames
-              ? rewriteDevinSkillMentions(rawPrompt, devinSkillNames)
+              ? rewriteSkillMentionsForProvider("devin", rawPrompt, devinSkillNames)
               : rawPrompt;
             promptParts.push({ type: "text", text: prompt });
           }

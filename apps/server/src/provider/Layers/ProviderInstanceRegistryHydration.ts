@@ -52,7 +52,6 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -121,7 +120,8 @@ export const deriveProviderInstanceConfigMap = (
  * and nothing is injected. When the router is disabled (its loopback listener
  * failed to bind) nothing is injected either, and referencing instances stay
  * native orphans — `resolveInstanceBackend` degrades a missing connection to
- * native silently, which is exactly the desired failure mode.
+ * native, and the registry logs the fallback via `orphanBackendConnectionId`
+ * so a harness talking to the vendor instead of the router stays visible.
  *
  * Pure & exported for unit tests.
  */
@@ -161,7 +161,10 @@ const SettingsWatcherLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const mutator = yield* ProviderInstanceRegistryMutator;
     const serverSettings = yield* ServerSettingsService;
-    const routerBaseUrl = yield* routerBaseUrlFromContext;
+    // Required (not optional): the layer edge orders hydration after the
+    // router bind, so the captured base URL is final. A single read at
+    // build time is enough because the router binds once per process.
+    const routerBaseUrl = (yield* ModelRouterProxy).baseUrl;
     const settingsChanges = yield* serverSettings.subscribeChanges;
     yield* settingsChanges.pipe(
       Stream.runForEach((next) =>
@@ -183,17 +186,6 @@ const SettingsWatcherLive = Layer.effectDiscard(
 );
 
 /**
- * The model router's base URL when its service is in the ambient context
- * (`Effect.serviceOption`, so hydration layers built without the router —
- * tests, partial harnesses — keep working; the router simply never injects
- * its connection there). The router binds once per process, so a single
- * read at layer build time is enough.
- */
-const routerBaseUrlFromContext = Effect.map(Effect.serviceOption(ModelRouterProxy), (router) =>
-  Option.isSome(router) ? router.value.baseUrl : undefined,
-);
-
-/**
  * Hydrate `ProviderInstanceRegistry` from `ServerSettings` and keep it in
  * sync with subsequent `streamChanges` emissions.
  *
@@ -212,11 +204,11 @@ const routerBaseUrlFromContext = Effect.map(Effect.serviceOption(ModelRouterProx
 export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
   ProviderInstanceRegistry,
   never,
-  BuiltInDriversEnv | ServerSettingsService
+  BuiltInDriversEnv | ServerSettingsService | ModelRouterProxy
 > = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
-    const routerBaseUrl = yield* routerBaseUrlFromContext;
+    const routerBaseUrl = (yield* ModelRouterProxy).baseUrl;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );

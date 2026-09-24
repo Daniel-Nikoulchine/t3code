@@ -20,6 +20,23 @@
  *             cross-protocol harness needing those is out of scope, and a
  *             dropped field degrades to plain text rather than erroring.
  *
+ * Chat Completions ↔ Responses (OpenAI's two dialects) covers the
+ * `codex-oauth` upstream, whose backend only serves `/responses`:
+ *
+ *   mapped    system messages → `instructions`, user/assistant messages,
+ *             text/image parts, tool definitions and tool_choice, assistant
+ *             `tool_calls` ↔ `function_call` items, `role:"tool"` messages ↔
+ *             `function_call_output`, `parallel_tool_calls`,
+ *             `response_format` ↔ `text.format`, usage counts, finish
+ *             reasons, streaming text and function-argument deltas.
+ *
+ *   dropped   temperature, top_p, max_tokens, stop sequences, n, seed,
+ *             penalties, logit_bias, logprobs, reasoning summaries, and
+ *             unknown content part types — the backend answers `400
+ *             Unsupported parameter` for sampling and budget knobs, so they
+ *             never go upstream; the rest follows the degrade-to-text policy
+ *             above.
+ *
  * Same-protocol traffic never enters this module: the proxy pipes those
  * bytes through untouched.
  *
@@ -383,17 +400,30 @@ export const openAIResponseToAnthropic = (
   };
 };
 
-export const openAIFinishToAnthropicStop = (finish: string | undefined): string => {
-  switch (finish) {
-    case "length":
-      return "max_tokens";
-    case "tool_calls":
-    case "function":
-      return "tool_use";
-    default:
-      return "end_turn";
-  }
+/**
+ * Declarative finish/stop-reason maps. The translators below are procedural
+ * (ordering rules, stream lifecycles, drop-lists — all live-verified), but
+ * these three mappings are pure 1:1 tables, so they live as consts instead
+ * of switch statements.
+ */
+const OPENAI_FINISH_TO_ANTHROPIC_STOP: Record<string, string> = {
+  length: "max_tokens",
+  tool_calls: "tool_use",
+  function: "tool_use",
 };
+
+const ANTHROPIC_STOP_TO_OPENAI_FINISH: Record<string, string> = {
+  max_tokens: "length",
+  tool_use: "tool_calls",
+};
+
+const RESPONSES_INCOMPLETE_TO_CHAT_FINISH: Record<string, string> = {
+  max_output_tokens: "length",
+  content_filter: "content_filter",
+};
+
+export const openAIFinishToAnthropicStop = (finish: string | undefined): string =>
+  (finish !== undefined ? OPENAI_FINISH_TO_ANTHROPIC_STOP[finish] : undefined) ?? "end_turn";
 
 /**
  * Translate a completed Anthropic message into an OpenAI completion.
@@ -450,16 +480,8 @@ export const anthropicResponseToOpenAI = (
   };
 };
 
-export const anthropicStopToOpenAIFinish = (stop: string | undefined): string => {
-  switch (stop) {
-    case "max_tokens":
-      return "length";
-    case "tool_use":
-      return "tool_calls";
-    default:
-      return "stop";
-  }
-};
+export const anthropicStopToOpenAIFinish = (stop: string | undefined): string =>
+  (stop !== undefined ? ANTHROPIC_STOP_TO_OPENAI_FINISH[stop] : undefined) ?? "stop";
 
 // ── non-streaming upstream → streaming inbound ──────────────────────────────
 // An upstream that answered JSON despite `stream: true` still has to reach an
@@ -886,6 +908,389 @@ export const createOpenAIToAnthropicChunkTranslator = (base: {
         return [messageStart(), ...finish()];
       }
       return finish();
+    },
+  };
+};
+
+// ── Chat Completions ↔ Responses ─────────────────────────────────────────────
+// The ChatGPT backend behind `codex-oauth` routes only serves `/responses`,
+// so chat-shaped harnesses ride this translation both ways. Recorded shapes
+// come from live `chatgpt.com/backend-api/codex` traffic, not the public
+// docs (which describe a wider API than this backend serves).
+
+const chatContentToResponsesParts = (
+  content: unknown,
+  role?: string,
+): Array<Record<string, unknown>> => {
+  const textType = role === "assistant" ? "output_text" : "input_text";
+  if (Predicate.isString(content)) {
+    return content.length > 0 ? [{ type: textType, text: content }] : [];
+  }
+  const parts: Array<Record<string, unknown>> = [];
+  for (const part of asArray(content) ?? []) {
+    const record = asRecord(part);
+    if (record?.type === "text") {
+      const text = textOf(record.text);
+      if (text.length > 0) parts.push({ type: textType, text });
+    } else if (record?.type === "image_url") {
+      const url = asString(asRecord(record.image_url)?.url);
+      if (url !== undefined) {
+        parts.push({
+          type: "input_image",
+          image_url: url,
+          ...(asString(record.detail) !== undefined ? { detail: record.detail } : {}),
+        });
+      }
+    }
+  }
+  return parts;
+};
+
+const chatToolsToResponses = (
+  tools: ReadonlyArray<unknown> | undefined,
+): Array<Record<string, unknown>> => {
+  const mapped: Array<Record<string, unknown>> = [];
+  for (const entry of tools ?? []) {
+    const tool = asRecord(entry);
+    const fn = asRecord(tool?.function);
+    if (tool?.type !== "function" || fn === undefined) continue;
+    mapped.push({
+      type: "function",
+      name: asString(fn.name) ?? "",
+      ...(fn.description !== undefined ? { description: textOf(fn.description) } : {}),
+      parameters: asRecord(fn.parameters) ?? {},
+      ...(typeof fn.strict === "boolean" ? { strict: fn.strict } : {}),
+    });
+  }
+  return mapped;
+};
+
+const chatToolChoiceToResponses = (choice: unknown): Record<string, unknown> => {
+  if (choice === undefined || choice === "auto" || choice === "none" || choice === "required") {
+    return choice === undefined ? {} : { tool_choice: choice };
+  }
+  const record = asRecord(choice);
+  const fn = asRecord(record?.function);
+  if (record?.type === "function" && fn !== undefined) {
+    return { tool_choice: { type: "function", name: asString(fn.name) ?? "" } };
+  }
+  return {};
+};
+
+const chatResponseFormatToResponses = (format: unknown): Record<string, unknown> | undefined => {
+  const record = asRecord(format);
+  if (record?.type === "json_object") return { type: "json_object" };
+  if (record?.type === "json_schema") {
+    return {
+      type: "json_schema",
+      ...(asString(record.name) !== undefined ? { name: record.name } : {}),
+      ...(asRecord(record.schema) !== undefined ? { schema: record.schema } : {}),
+      ...(typeof record.strict === "boolean" ? { strict: record.strict } : {}),
+    };
+  }
+  return undefined;
+};
+
+/**
+ * Translate an OpenAI Chat Completions request into a Responses request.
+ * `stream` stays with the caller (the proxy forces it for this backend);
+ * `store: false` keeps the stateless proxy from persisting conversations on
+ * the account.
+ *
+ * Assistant history may only carry `output_text` parts (input_text 400s on
+ * assistant messages, verified live against opencode-go). Text-only
+ * assistant turns without tool calls are dropped instead: they restate
+ * earlier context the upstream keeps, and re-sending them as output_text
+ * risks a forged-prior-output rejection.
+ */
+export const chatCompletionsRequestToResponses = (
+  body: Record<string, unknown>,
+  upstreamModel: string,
+): Record<string, unknown> => {
+  const instructions: Array<string> = [];
+  const input: Array<Record<string, unknown>> = [];
+  for (const entry of asArray(body.messages) ?? []) {
+    const message = asRecord(entry);
+    if (message === undefined) continue;
+    const role = asString(message.role);
+    if (role === "system") {
+      const text = openAIContentText(message.content);
+      if (text.length > 0) instructions.push(text);
+    } else if (role === "developer" || role === "user" || role === "assistant") {
+      const parts = chatContentToResponsesParts(message.content, role);
+      if (role === "assistant") {
+        const toolCalls = asArray(message.tool_calls) ?? [];
+        // Assistant history with tool calls rides function_call items; the
+        // preceding text is dropped (it restates context the upstream keeps
+        // and re-sending it as output_text risks forged-output rejection).
+        if (parts.length > 0 && toolCalls.length === 0) continue;
+        for (const toolCall of toolCalls) {
+          const call = asRecord(toolCall);
+          const fn = asRecord(call?.function);
+          if (fn === undefined) continue;
+          input.push({
+            type: "function_call",
+            call_id: asString(call?.id) ?? "",
+            name: asString(fn.name) ?? "",
+            arguments: asString(fn.arguments) ?? "{}",
+          });
+        }
+      } else if (parts.length > 0) {
+        input.push({ type: "message", role, content: parts });
+      }
+    } else if (role === "tool") {
+      input.push({
+        type: "function_call_output",
+        call_id: asString(message.tool_call_id) ?? "",
+        output: openAIContentText(message.content),
+      });
+    }
+  }
+  const tools = chatToolsToResponses(asArray(body.tools));
+  const textFormat = chatResponseFormatToResponses(body.response_format);
+  return {
+    model: upstreamModel,
+    ...(instructions.length > 0 ? { instructions: instructions.join("\n\n") } : {}),
+    input,
+    store: false,
+    ...(tools.length > 0 ? { tools } : {}),
+    ...chatToolChoiceToResponses(body.tool_choice),
+    // Reasoning effort rides `reasoning_effort` (pi `supportsReasoningEffort`,
+    // OpenRouter style) into Responses `reasoning.effort`. `off`/`none` and
+    // anything unknown stay home: the backend 400s on unexpected params.
+    ...(typeof body.reasoning_effort === "string" &&
+    ["minimal", "low", "medium", "high"].includes(body.reasoning_effort)
+      ? { reasoning: { effort: body.reasoning_effort } }
+      : {}),
+    // Sampling and budget knobs (temperature, top_p, max_tokens, stop, n,
+    // seed, penalties) never go upstream: the backend answers `400
+    // Unsupported parameter` for them, verified live.
+    ...(typeof body.parallel_tool_calls === "boolean"
+      ? { parallel_tool_calls: body.parallel_tool_calls }
+      : {}),
+    ...(textFormat !== undefined ? { text: { format: textFormat } } : {}),
+  };
+};
+
+export const responsesStatusToChatFinish = (
+  status: string | undefined,
+  incompleteReason: string | undefined,
+  hasToolCalls: boolean,
+): string => {
+  if (status === "incomplete") {
+    return (
+      (incompleteReason !== undefined
+        ? RESPONSES_INCOMPLETE_TO_CHAT_FINISH[incompleteReason]
+        : undefined) ?? "stop"
+    );
+  }
+  if (hasToolCalls) return "tool_calls";
+  return "stop";
+};
+
+/**
+ * Translate a completed Responses object into a Chat Completion. `items`
+ * are the accumulated `output_item.done` payloads — the completed envelope
+ * itself can carry an empty `output` while the items only arrived as stream
+ * events (seen live with tool-call-only turns).
+ */
+export const responsesResponseToChatCompletion = (
+  response: Record<string, unknown>,
+  items: ReadonlyArray<unknown>,
+  upstreamModel: string,
+  createdSeconds: number,
+): Record<string, unknown> => {
+  const texts: Array<string> = [];
+  const toolCalls: Array<Record<string, unknown>> = [];
+  for (const entry of items) {
+    const item = asRecord(entry);
+    if (item?.type === "message") {
+      for (const part of asArray(item.content) ?? []) {
+        const record = asRecord(part);
+        if (record?.type === "output_text") texts.push(textOf(record.text));
+        else if (record?.type === "refusal") texts.push(textOf(record.refusal));
+      }
+    } else if (item?.type === "function_call") {
+      toolCalls.push({
+        id: asString(item.call_id) ?? `call_${toolCalls.length}`,
+        type: "function",
+        function: {
+          name: asString(item.name) ?? "",
+          arguments: asString(item.arguments) ?? "{}",
+        },
+      });
+    }
+  }
+  const content = texts.join("");
+  const usage = asRecord(response.usage);
+  const promptTokens = asNumber(usage?.input_tokens) ?? 0;
+  const completionTokens = asNumber(usage?.output_tokens) ?? 0;
+  return {
+    id: `chatcmpl_${asString(response.id) ?? "proxy"}`,
+    object: "chat.completion",
+    created: asNumber(response.created_at) ?? createdSeconds,
+    model: upstreamModel,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: content.length > 0 ? content : toolCalls.length > 0 ? null : "",
+          ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+        },
+        finish_reason: responsesStatusToChatFinish(
+          asString(response.status),
+          asString(asRecord(response.incomplete_details)?.reason),
+          toolCalls.length > 0,
+        ),
+      },
+    ],
+    usage: {
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: asNumber(usage?.total_tokens) ?? promptTokens + completionTokens,
+    },
+  };
+};
+
+/**
+ * Upstream Responses SSE events → downstream OpenAI `chat.completion.chunk`
+ * payloads. Mirrors `createAnthropicToOpenAIChunkTranslator`: the downstream
+ * `[DONE]` sentinel is emitted by the HTTP layer after `end()`, not here.
+ * Mid-stream upstream failures end the stream silently, same as the sibling
+ * translators — the non-streaming path surfaces them as 502 instead.
+ */
+export const createResponsesToOpenAIChunkTranslator = (base: {
+  readonly id: string;
+  readonly model: string;
+  readonly created: number;
+  readonly includeUsage?: boolean | undefined;
+}): StreamChunkTranslator<Record<string, unknown>> => {
+  let started = false;
+  let finished = false;
+  let finishReason: string | undefined = undefined;
+  let sawToolCalls = false;
+  let nextToolIndex = 0;
+  let usage: Record<string, unknown> | undefined = undefined;
+  // Responses `output_index` → chat `tool_calls` index for the stream.
+  const toolCalls = new Map<number, { readonly index: number; readonly callId: string }>();
+
+  const chunk = (delta: Record<string, unknown>, finish: string | null = null) => ({
+    id: base.id,
+    object: "chat.completion.chunk",
+    created: base.created,
+    model: base.model,
+    choices: [{ index: 0, delta, finish_reason: finish }],
+  });
+
+  const ensureStarted = (): ReadonlyArray<Record<string, unknown>> => {
+    if (started) return [];
+    started = true;
+    return [chunk({ role: "assistant" })];
+  };
+
+  const toolEntryFor = (outputIndex: number | undefined): { index: number; callId: string } => {
+    const known = outputIndex === undefined ? undefined : toolCalls.get(outputIndex);
+    if (known !== undefined) return known;
+    if (outputIndex === undefined && toolCalls.size === 1) {
+      return [...toolCalls.values()][0]!;
+    }
+    const entry = { index: nextToolIndex++, callId: "" };
+    toolCalls.set(outputIndex ?? -1 - entry.index, entry);
+    return entry;
+  };
+
+  return {
+    push(event) {
+      switch (event.type) {
+        case "response.created":
+        case "response.in_progress":
+          return ensureStarted();
+        case "response.output_item.added": {
+          const item = asRecord(event.item);
+          if (item?.type !== "function_call") return ensureStarted();
+          const outputIndex = asNumber(event.output_index);
+          const known = outputIndex === undefined ? undefined : toolCalls.get(outputIndex);
+          const index = known?.index ?? nextToolIndex++;
+          const entry = {
+            index,
+            callId: asString(item.call_id) ?? known?.callId ?? "",
+          };
+          if (outputIndex !== undefined) toolCalls.set(outputIndex, entry);
+          else toolCalls.set(-1 - index, entry);
+          sawToolCalls = true;
+          return [
+            ...ensureStarted(),
+            chunk({
+              tool_calls: [
+                {
+                  index,
+                  id: entry.callId.length > 0 ? entry.callId : `call_${index}`,
+                  type: "function",
+                  function: { name: asString(item.name) ?? "", arguments: "" },
+                },
+              ],
+            }),
+          ];
+        }
+        case "response.output_text.delta": {
+          const delta = asString(event.delta);
+          if (delta === undefined || delta.length === 0) return ensureStarted();
+          return [...ensureStarted(), chunk({ content: delta })];
+        }
+        case "response.function_call_arguments.delta": {
+          const delta = asString(event.delta);
+          const entry = toolEntryFor(asNumber(event.output_index));
+          sawToolCalls = true;
+          if (delta === undefined || delta.length === 0) return ensureStarted();
+          return [
+            ...ensureStarted(),
+            chunk({ tool_calls: [{ index: entry.index, function: { arguments: delta } }] }),
+          ];
+        }
+        case "response.completed": {
+          const response = asRecord(event.response);
+          finished = true;
+          if (asString(response?.status) === "failed") return [];
+          const usageRecord = asRecord(response?.usage);
+          if (usageRecord !== undefined) {
+            usage = {
+              prompt_tokens: asNumber(usageRecord.input_tokens) ?? 0,
+              completion_tokens: asNumber(usageRecord.output_tokens) ?? 0,
+              total_tokens: asNumber(usageRecord.total_tokens) ?? 0,
+            };
+          }
+          finishReason = responsesStatusToChatFinish(
+            asString(response?.status),
+            asString(asRecord(response?.incomplete_details)?.reason),
+            sawToolCalls,
+          );
+          return [chunk({}, finishReason)];
+        }
+        default:
+          // done events, failures, and unknown frames: nothing to map.
+          return [];
+      }
+    },
+    end() {
+      const out: Array<Record<string, unknown>> = [];
+      if (!started) return out;
+      if (!finished) {
+        // Upstream closed without response.completed — close the stream so
+        // the harness sees a finished response instead of a hang.
+        out.push(chunk({}, finishReason ?? (sawToolCalls ? "tool_calls" : "stop")));
+      }
+      if (base.includeUsage === true && usage !== undefined) {
+        out.push({
+          id: base.id,
+          object: "chat.completion.chunk",
+          created: base.created,
+          model: base.model,
+          choices: [],
+          usage,
+        });
+      }
+      return out;
     },
   };
 };

@@ -2,7 +2,6 @@ import {
   classifyTaskAgentKind,
   EventId,
   MessageId,
-  ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
@@ -16,8 +15,6 @@ import {
   deriveTimelineEntries,
   deriveTimelineEntriesWithState,
   deriveWorkLogEntries,
-  findLatestProposedPlan,
-  hasActionableProposedPlan,
   isLatestTurnSettled,
   selectHandoffImageResources,
   selectMessageImageResources,
@@ -332,111 +329,6 @@ describe("deriveActivePlanState", () => {
   });
 });
 
-describe("findLatestProposedPlan", () => {
-  it("prefers the latest proposed plan for the active turn", () => {
-    expect(
-      findLatestProposedPlan(
-        [
-          {
-            id: "plan:thread-1:turn:turn-1",
-            turnId: TurnId.make("turn-1"),
-            planMarkdown: "# Older",
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: "2026-02-23T00:00:01.000Z",
-            updatedAt: "2026-02-23T00:00:01.000Z",
-          },
-          {
-            id: "plan:thread-1:turn:turn-1",
-            turnId: TurnId.make("turn-1"),
-            planMarkdown: "# Latest",
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: "2026-02-23T00:00:01.000Z",
-            updatedAt: "2026-02-23T00:00:02.000Z",
-          },
-          {
-            id: "plan:thread-1:turn:turn-2",
-            turnId: TurnId.make("turn-2"),
-            planMarkdown: "# Different turn",
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: "2026-02-23T00:00:03.000Z",
-            updatedAt: "2026-02-23T00:00:03.000Z",
-          },
-        ],
-        TurnId.make("turn-1"),
-      ),
-    ).toEqual({
-      id: "plan:thread-1:turn:turn-1",
-      turnId: "turn-1",
-      planMarkdown: "# Latest",
-      implementedAt: null,
-      implementationThreadId: null,
-      createdAt: "2026-02-23T00:00:01.000Z",
-      updatedAt: "2026-02-23T00:00:02.000Z",
-    });
-  });
-
-  it("falls back to the most recently updated proposed plan", () => {
-    const latestPlan = findLatestProposedPlan(
-      [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.make("turn-1"),
-          planMarkdown: "# First",
-          implementedAt: null,
-          implementationThreadId: null,
-          createdAt: "2026-02-23T00:00:01.000Z",
-          updatedAt: "2026-02-23T00:00:01.000Z",
-        },
-        {
-          id: "plan:thread-1:turn:turn-2",
-          turnId: TurnId.make("turn-2"),
-          planMarkdown: "# Latest",
-          implementedAt: null,
-          implementationThreadId: null,
-          createdAt: "2026-02-23T00:00:02.000Z",
-          updatedAt: "2026-02-23T00:00:03.000Z",
-        },
-      ],
-      null,
-    );
-
-    expect(latestPlan?.planMarkdown).toBe("# Latest");
-  });
-});
-
-describe("hasActionableProposedPlan", () => {
-  it("returns true for an unimplemented proposed plan", () => {
-    expect(
-      hasActionableProposedPlan({
-        id: "plan-1",
-        turnId: TurnId.make("turn-1"),
-        planMarkdown: "# Plan",
-        implementedAt: null,
-        implementationThreadId: null,
-        createdAt: "2026-02-23T00:00:00.000Z",
-        updatedAt: "2026-02-23T00:00:01.000Z",
-      }),
-    ).toBe(true);
-  });
-
-  it("returns false for a proposed plan already implemented elsewhere", () => {
-    expect(
-      hasActionableProposedPlan({
-        id: "plan-1",
-        turnId: TurnId.make("turn-1"),
-        planMarkdown: "# Plan",
-        implementedAt: "2026-02-23T00:00:02.000Z",
-        implementationThreadId: ThreadId.make("thread-implement"),
-        createdAt: "2026-02-23T00:00:00.000Z",
-        updatedAt: "2026-02-23T00:00:02.000Z",
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("workEntryIndicatesToolNeutralStatus", () => {
   it("keeps active tools neutral and agent spawns visible", () => {
     const entry = {
@@ -736,7 +628,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
-  it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
+  it("keeps tool entries that mention ExitPlanMode in detail", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "exit-plan-updated",
@@ -769,7 +661,11 @@ describe("deriveWorkLogEntries", () => {
     ];
 
     const entries = deriveWorkLogEntries(activities);
-    expect(entries.map((entry) => entry.id)).toEqual(["real-work-log"]);
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "exit-plan-updated",
+      "exit-plan-completed",
+      "real-work-log",
+    ]);
   });
 
   it("orders work log by activity sequence when present", () => {
@@ -1843,7 +1739,7 @@ describe("deriveTimelineEntries", () => {
     const work = [
       { id: "work", createdAt: history.createdAt, label: "Ran tests", tone: "tool" as const },
     ];
-    const first = deriveTimelineEntriesWithState([history, streamingMessage], [], work);
+    const first = deriveTimelineEntriesWithState([history, streamingMessage], work);
     Object.freeze(first.entries);
     for (const entry of first.entries) Object.freeze(entry);
 
@@ -1857,11 +1753,11 @@ describe("deriveTimelineEntries", () => {
       text: "Second",
       updatedAt: "2026-02-23T00:00:05.000Z",
     };
-    const firstBranch = deriveTimelineEntriesWithState([history, firstMessage], [], work, first);
-    const secondBranch = deriveTimelineEntriesWithState([history, secondMessage], [], work, first);
+    const firstBranch = deriveTimelineEntriesWithState([history, firstMessage], work, first);
+    const secondBranch = deriveTimelineEntriesWithState([history, secondMessage], work, first);
 
-    expect(firstBranch.entries).toEqual(deriveTimelineEntries([history, firstMessage], [], work));
-    expect(secondBranch.entries).toEqual(deriveTimelineEntries([history, secondMessage], [], work));
+    expect(firstBranch.entries).toEqual(deriveTimelineEntries([history, firstMessage], work));
+    expect(secondBranch.entries).toEqual(deriveTimelineEntries([history, secondMessage], work));
     expect(firstBranch.entries[0]).toBe(first.entries[0]);
     expect(firstBranch.entries[2]).toBe(first.entries[2]);
     expect(first.entries[1]).toMatchObject({ message: { text: "" } });
@@ -1869,31 +1765,21 @@ describe("deriveTimelineEntries", () => {
   });
 
   it("preserves stable source ordering for ties, append, and older pages", () => {
-    const plan = {
-      id: "plan:thread:turn",
-      turnId: streamingMessage.turnId,
-      planMarkdown: "Plan",
-      implementedAt: null,
-      implementationThreadId: null,
-      createdAt: streamingMessage.createdAt,
-      updatedAt: streamingMessage.createdAt,
-    };
     const firstWork = {
       id: "work-1",
       createdAt: streamingMessage.createdAt,
       label: "Ran tests",
       tone: "tool" as const,
     };
-    const first = deriveTimelineEntriesWithState([streamingMessage], [plan], [firstWork]);
+    const first = deriveTimelineEntriesWithState([streamingMessage], [firstWork]);
     const appendedMessage = { ...streamingMessage, id: MessageId.make("appended") };
     const appendedWork = { ...firstWork, id: "work-2" };
     const messages = [streamingMessage, appendedMessage];
     const work = [firstWork, appendedWork];
-    const appended = deriveTimelineEntriesWithState(messages, [plan], work, first);
+    const appended = deriveTimelineEntriesWithState(messages, work, first);
     expect(appended.entries.map((entry) => entry.id)).toEqual([
       streamingMessage.id,
       appendedMessage.id,
-      plan.id,
       firstWork.id,
       appendedWork.id,
     ]);
@@ -1904,19 +1790,19 @@ describe("deriveTimelineEntries", () => {
       id: MessageId.make("older"),
       createdAt: "2026-02-22T00:00:00.000Z",
     };
-    const prepended = deriveTimelineEntriesWithState([older, ...messages], [plan], work, appended);
-    expect(prepended.entries).toEqual(deriveTimelineEntries([older, ...messages], [plan], work));
+    const prepended = deriveTimelineEntriesWithState([older, ...messages], work, appended);
+    expect(prepended.entries).toEqual(deriveTimelineEntries([older, ...messages], work));
     const corrected = {
       ...streamingMessage,
       createdAt: "2026-02-24T00:00:00.000Z",
       streaming: false,
     };
     expect(
-      deriveTimelineEntriesWithState([corrected, appendedMessage], [plan], work, appended).entries,
-    ).toEqual(deriveTimelineEntries([corrected, appendedMessage], [plan], work));
+      deriveTimelineEntriesWithState([corrected, appendedMessage], work, appended).entries,
+    ).toEqual(deriveTimelineEntries([corrected, appendedMessage], work));
   });
 
-  it("includes proposed plans alongside messages and work entries in chronological order", () => {
+  it("orders messages and work entries in chronological order", () => {
     const entries = deriveTimelineEntries(
       [
         {
@@ -1931,17 +1817,6 @@ describe("deriveTimelineEntries", () => {
       ],
       [
         {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.make("turn-1"),
-          planMarkdown: "# Ship it",
-          implementedAt: null,
-          implementationThreadId: null,
-          createdAt: "2026-02-23T00:00:02.000Z",
-          updatedAt: "2026-02-23T00:00:02.000Z",
-        },
-      ],
-      [
-        {
           id: "work-1",
           createdAt: "2026-02-23T00:00:03.000Z",
           label: "Ran tests",
@@ -1950,15 +1825,7 @@ describe("deriveTimelineEntries", () => {
       ],
     );
 
-    expect(entries.map((entry) => entry.kind)).toEqual(["message", "proposed-plan", "work"]);
-    expect(entries[1]).toMatchObject({
-      kind: "proposed-plan",
-      proposedPlan: {
-        planMarkdown: "# Ship it",
-        implementedAt: null,
-        implementationThreadId: null,
-      },
-    });
+    expect(entries.map((entry) => entry.kind)).toEqual(["message", "work"]);
   });
 });
 
@@ -2035,7 +1902,10 @@ describe("isLatestTurnSettled", () => {
     ).toBe(true);
   });
 
-  it("returns false when turn timestamps are incomplete", () => {
+  it("returns true for a completed turn even when startedAt is missing", () => {
+    // The projector backfills startedAt whenever it stamps completedAt, so a
+    // completed-without-started turn only comes from shell/legacy data — and
+    // that work is over, so the indicator must stop instead of spinning forever.
     expect(
       isLatestTurnSettled(
         {
@@ -2045,7 +1915,7 @@ describe("isLatestTurnSettled", () => {
         },
         null,
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 

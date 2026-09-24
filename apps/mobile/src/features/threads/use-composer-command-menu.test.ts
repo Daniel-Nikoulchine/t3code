@@ -26,35 +26,29 @@ import {
 describe("mobile slash commands", () => {
   const antigravity = {
     driver: ProviderDriverKind.make("antigravity"),
-    showInteractionModeToggle: false,
     slashCommands: [{ name: "plan", description: "Plan with Antigravity" }],
   };
 
-  it.each([false, true])(
-    "keeps native /plan with legacy mode enabled=%s",
-    (allowInteractionMode) => {
-      const items = buildComposerSlashCommandItems({
-        query: "pl",
-        atMessageStart: true,
-        hasThread: true,
-        allowInteractionMode,
-        selectedProviderStatus: antigravity,
-      });
+  it("keeps native /plan as plain text", () => {
+    const items = buildComposerSlashCommandItems({
+      query: "pl",
+      atMessageStart: true,
+      hasThread: true,
+      selectedProviderStatus: antigravity,
+    });
 
-      expect(items).toHaveLength(1);
-      expect(items[0]?.type).toBe("provider-slash-command");
-      const item = items[0];
-      if (!item) throw new Error("Expected the native plan command");
-      expect(
-        resolveComposerCommandSelection({
-          draftMessage: "/pl",
-          trigger: { rangeStart: 0, rangeEnd: 3 },
-          item,
-          allowInteractionMode,
-        }),
-      ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
-    },
-  );
+    expect(items).toHaveLength(1);
+    expect(items[0]?.type).toBe("provider-slash-command");
+    const item = items[0];
+    if (!item) throw new Error("Expected the native plan command");
+    expect(
+      resolveComposerCommandSelection({
+        draftMessage: "/pl",
+        trigger: { rangeStart: 0, rangeEnd: 3 },
+        item,
+      }),
+    ).toEqual({ text: "/plan ", cursor: 6 });
+  });
 
   it("does not offer a native command inside the message", () => {
     expect(
@@ -62,42 +56,37 @@ describe("mobile slash commands", () => {
         query: "plan",
         atMessageStart: false,
         hasThread: false,
-        allowInteractionMode: true,
         selectedProviderStatus: antigravity,
       }),
     ).toEqual([]);
   });
 
-  it("still applies the T3 plan command for supported providers", () => {
+  it("treats /plan as plain text with no mode switch", () => {
     const items = buildComposerSlashCommandItems({
       query: "plan",
       atMessageStart: true,
       hasThread: true,
-      allowInteractionMode: true,
       selectedProviderStatus: {
         driver: ProviderDriverKind.make("codex"),
         slashCommands: [],
       },
     });
-    const item = items[0];
-    if (!item) throw new Error("Expected the T3 plan command");
-    expect(
-      resolveComposerCommandSelection({
-        draftMessage: "/plan",
-        trigger: { rangeStart: 0, rangeEnd: 5 },
-        item,
-        allowInteractionMode: true,
-      }),
-    ).toEqual({ text: "", cursor: 0, interactionMode: "plan" });
+    // No T3 plan command remains; only provider commands match.
+    expect(items).toEqual([]);
 
-    // A provider switch can invalidate an open menu before a tap arrives.
+    const providerPlan = {
+      id: "pcmd:plan",
+      type: "provider-slash-command" as const,
+      command: { name: "plan", description: "Plan with provider" },
+      label: "/plan",
+      description: "Plan with provider",
+    };
     expect(
       resolveComposerCommandSelection({
         draftMessage: "/plan",
         trigger: { rangeStart: 0, rangeEnd: 5 },
-        item,
-        allowInteractionMode: false,
+        item: providerPlan,
       }),
-    ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
+    ).toEqual({ text: "/plan ", cursor: 6 });
   });
 });

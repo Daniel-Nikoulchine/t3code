@@ -4,13 +4,16 @@ import {
   anthropicMessageToStreamEvents,
   anthropicRequestToOpenAI,
   anthropicResponseToOpenAI,
+  chatCompletionsRequestToResponses,
   createAnthropicToOpenAIChunkTranslator,
   createOpenAIToAnthropicChunkTranslator,
+  createResponsesToOpenAIChunkTranslator,
   createSseParser,
   encodeSseFrame,
   openAICompletionToChunkSequence,
   openAIRequestToAnthropic,
   openAIResponseToAnthropic,
+  responsesResponseToChatCompletion,
 } from "./modelRouterTranslation.ts";
 
 /** Typed view over OpenAI completion/chunk payloads for assertions. */
@@ -588,5 +591,274 @@ describe("encodeSseFrame", () => {
       'event: message_stop\ndata: {"type":"message_stop"}\n\n',
     );
     expect(encodeSseFrame({ data: { a: 1 } })).toBe('data: {"a":1}\n\n');
+  });
+});
+
+describe("chatCompletionsRequestToResponses", () => {
+  it("maps messages and tools; sampling knobs stay home", () => {
+    expect(
+      chatCompletionsRequestToResponses(
+        {
+          model: "alias",
+          messages: [
+            { role: "system", content: "Be terse." },
+            { role: "user", content: "Hi" },
+            {
+              role: "assistant",
+              content: "Checking.",
+              tool_calls: [
+                { id: "call_1", type: "function", function: { name: "w", arguments: "{}" } },
+              ],
+            },
+            { role: "tool", tool_call_id: "call_1", content: "sunny" },
+          ],
+          // The backend 400s on these (verified live), so they never go up.
+          temperature: 0.2,
+          top_p: 0.9,
+          max_tokens: 64,
+          stop: ["STOP"],
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "w",
+                description: "Weather",
+                parameters: { type: "object", properties: {} },
+              },
+            },
+          ],
+          tool_choice: "auto",
+        },
+        "upstream-luna",
+      ),
+    ).toEqual({
+      model: "upstream-luna",
+      instructions: "Be terse.",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Hi" }] },
+        { type: "function_call", call_id: "call_1", name: "w", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_1", output: "sunny" },
+      ],
+      store: false,
+      tools: [
+        {
+          type: "function",
+          name: "w",
+          description: "Weather",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+      tool_choice: "auto",
+    });
+  });
+
+  it("maps image parts and a named tool choice", () => {
+    const out = chatCompletionsRequestToResponses(
+      {
+        model: "alias",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is this?" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,AAA" } },
+            ],
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "w" } },
+      },
+      "upstream-luna",
+    ) as { input: Array<{ content: Array<Record<string, unknown>> }>; tool_choice: unknown };
+    expect(out.input[0]?.content).toEqual([
+      { type: "input_text", text: "What is this?" },
+      { type: "input_image", image_url: "data:image/png;base64,AAA" },
+    ]);
+    expect(out.tool_choice).toEqual({ type: "function", name: "w" });
+  });
+
+  it("drops text-only assistant history; it restates context the upstream keeps", () => {
+    const out = chatCompletionsRequestToResponses(
+      {
+        model: "alias",
+        messages: [
+          { role: "user", content: "What is 2+2?" },
+          { role: "assistant", content: "4" },
+          { role: "user", content: "And plus 1?" },
+        ],
+      },
+      "upstream-luna",
+    ) as { input: Array<unknown> };
+    expect(out.input).toEqual([
+      { type: "message", role: "user", content: [{ type: "input_text", text: "What is 2+2?" }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "And plus 1?" }] },
+    ]);
+  });
+
+  it("maps reasoning_effort into Responses reasoning; off and unknown stay home", () => {
+    const base = { model: "alias", messages: [{ role: "user", content: "Hi" }] };
+    expect(
+      chatCompletionsRequestToResponses({ ...base, reasoning_effort: "high" }, "upstream-luna"),
+    ).toMatchObject({ reasoning: { effort: "high" } });
+    for (const effort of ["off", "none", "ultra", 7, null, undefined]) {
+      expect(
+        chatCompletionsRequestToResponses({ ...base, reasoning_effort: effort }, "upstream-luna"),
+      ).not.toHaveProperty("reasoning");
+    }
+  });
+});
+
+describe("responsesResponseToChatCompletion", () => {
+  // Recorded from chatgpt.com/backend-api/codex (ids shortened).
+  const response = {
+    id: "resp_abc",
+    object: "response",
+    created_at: 1789683892,
+    status: "completed",
+    model: "gpt-5.6-luna",
+    usage: { input_tokens: 51, output_tokens: 18, total_tokens: 69 },
+  };
+
+  it("reads text and usage off the completed envelope", () => {
+    const completion = responsesResponseToChatCompletion(
+      response,
+      [
+        {
+          id: "msg_abc",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "OK", annotations: [] }],
+        },
+      ],
+      "upstream-luna",
+      0,
+    );
+    expect(completion).toMatchObject({
+      id: "chatcmpl_resp_abc",
+      object: "chat.completion",
+      created: 1789683892,
+      model: "upstream-luna",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "OK" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 51, completion_tokens: 18, total_tokens: 69 },
+    });
+  });
+
+  it("reads tool calls off accumulated items even when the envelope output is empty", () => {
+    const completion = asCompletion(
+      responsesResponseToChatCompletion(
+        { ...response, output: [] },
+        [
+          {
+            id: "fc_abc",
+            type: "function_call",
+            status: "completed",
+            arguments: '{"name":"Ada"}',
+            call_id: "call_xyz",
+            name: "greet",
+          },
+        ],
+        "upstream-luna",
+        0,
+      ),
+    );
+    expect(completion.choices?.[0]?.finish_reason).toBe("tool_calls");
+    expect(completion.choices?.[0]?.delta).toBeUndefined();
+    const message = (
+      completion as unknown as {
+        choices: Array<{ message: { content: null; tool_calls: Array<unknown> } }>;
+      }
+    ).choices[0]?.message;
+    expect(message?.content).toBeNull();
+    expect(message?.tool_calls).toEqual([
+      {
+        id: "call_xyz",
+        type: "function",
+        function: { name: "greet", arguments: '{"name":"Ada"}' },
+      },
+    ]);
+  });
+
+  it("maps an incomplete response to length", () => {
+    const completion = asCompletion(
+      responsesResponseToChatCompletion(
+        { ...response, status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
+        [],
+        "upstream-luna",
+        7,
+      ),
+    );
+    expect(completion.choices?.[0]?.finish_reason).toBe("length");
+  });
+});
+
+describe("createResponsesToOpenAIChunkTranslator", () => {
+  const base = { id: "chatcmpl_test", model: "upstream-luna", created: 11 };
+
+  const feed = (
+    events: ReadonlyArray<Record<string, unknown>>,
+  ): ReadonlyArray<Record<string, unknown>> => {
+    const translator = createResponsesToOpenAIChunkTranslator(base);
+    const out = events.flatMap((event) => translator.push(event));
+    return [...out, ...translator.end()];
+  };
+
+  it("streams text deltas and closes with the completed finish reason", () => {
+    const chunks = feed([
+      { type: "response.created", response: { id: "resp_1" } },
+      { type: "response.output_text.delta", delta: "O", content_index: 0 },
+      { type: "response.output_text.delta", delta: "K", content_index: 0 },
+      {
+        type: "response.completed",
+        response: { ...{ id: "resp_1", status: "completed", usage: null } },
+      },
+    ]).map(asCompletion);
+    expect(chunks.map((c) => c.choices?.[0]?.delta)).toEqual([
+      { role: "assistant" },
+      { content: "O" },
+      { content: "K" },
+      {},
+    ]);
+    expect(chunks.map((c) => c.choices?.[0]?.finish_reason)).toEqual([null, null, null, "stop"]);
+  });
+
+  it("streams tool calls by output index with arguments appended", () => {
+    const chunks = feed([
+      { type: "response.created", response: {} },
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "greet" },
+      },
+      { type: "response.function_call_arguments.delta", output_index: 0, delta: '{"na' },
+      { type: "response.function_call_arguments.delta", output_index: 0, delta: 'me":"Ada"}' },
+      {
+        type: "response.function_call_arguments.done",
+        output_index: 0,
+        arguments: '{"name":"Ada"}',
+      },
+      { type: "response.completed", response: { id: "resp_1", status: "completed" } },
+    ]).map(asCompletion);
+    const toolDeltas = chunks.flatMap((c) => c.choices?.[0]?.delta?.tool_calls ?? []);
+    expect(toolDeltas[0]).toMatchObject({ index: 0, id: "call_1", function: { name: "greet" } });
+    expect(toolDeltas.slice(1)).toEqual([
+      { index: 0, function: { arguments: '{"na' } },
+      { index: 0, function: { arguments: 'me":"Ada"}' } },
+    ]);
+    expect(chunks.at(-1)?.choices?.[0]?.finish_reason).toBe("tool_calls");
+  });
+
+  it("closes a truncated stream instead of hanging", () => {
+    const translator = createResponsesToOpenAIChunkTranslator(base);
+    const out = [
+      ...translator.push({ type: "response.created", response: {} }),
+      ...translator.end(),
+    ].map(asCompletion);
+    expect(out.at(-1)?.choices?.[0]?.finish_reason).toBe("stop");
   });
 });

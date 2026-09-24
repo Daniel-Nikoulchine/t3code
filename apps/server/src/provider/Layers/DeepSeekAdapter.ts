@@ -16,7 +16,6 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { stableStringify } from "@t3tools/shared/relaySigning";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -32,7 +31,6 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -48,6 +46,13 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  makeEventStamper,
+  makeExtensionFailureMapper,
+  makeThreadLockRegistry,
+  requireScaffoldSession,
+  settlePendingApprovalsAsCancelled,
+} from "../acp/AcpAdapterScaffold.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -71,6 +76,7 @@ import {
 } from "../acp/DeepSeekAcpSupport.ts";
 import { type DeepSeekAdapterShape } from "../Services/DeepSeekAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { selectKindBasedPermissionOptionId } from "./permissionOptionSelection.ts";
 
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
@@ -155,16 +161,6 @@ interface DeepSeekSessionContext {
   stopped: boolean;
 }
 
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  return Effect.forEach(
-    Array.from(pendingApprovals.values()),
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    { discard: true },
-  );
-}
-
 function settlePendingUserInputsAsCancelled(
   pendingUserInputs: ReadonlyMap<ApprovalRequestId, PendingUserInput>,
 ): Effect.Effect<void> {
@@ -219,26 +215,7 @@ export function selectDeepSeekPermissionOptionId(
   request: EffectAcpSchema.RequestPermissionRequest,
   decision: Exclude<ProviderApprovalDecision, "cancel">,
 ): string | undefined {
-  const preferredKind =
-    decision === "acceptForSession"
-      ? "allow_always"
-      : decision === "accept"
-        ? "allow_once"
-        : "reject_once";
-  const preferred = request.options.find((entry) => entry.kind === preferredKind);
-  const preferredId = preferred?.optionId.trim();
-  if (preferredId) {
-    return preferredId;
-  }
-  // DeepSeek 4.6 often omits allow_always. T3 still offers "Always allow this session".
-  if (decision === "acceptForSession") {
-    const once = request.options.find((entry) => entry.kind === "allow_once");
-    const onceId = once?.optionId.trim();
-    if (onceId) {
-      return onceId;
-    }
-  }
-  return undefined;
+  return selectKindBasedPermissionOptionId(request, decision);
 }
 
 function selectAutoApprovedPermissionOption(
@@ -293,7 +270,6 @@ export function makeDeepSeekAdapter(
     const makeAcpNativeLoggers = yield* makeAcpNativeLoggerFactory();
 
     const sessions = new Map<ThreadId, DeepSeekSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const requestedTurnInactivityTimeoutMs = options?.turnInactivityTimeoutMs;
     const turnInactivityTimeoutMs =
@@ -311,54 +287,22 @@ export function makeDeepSeekAdapter(
     const activeToolInactivityTimeoutNanos =
       BigInt(activeToolInactivityTimeoutMs) * NANOS_PER_MILLI;
 
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "crypto/randomUUIDv4",
-            detail: "Failed to generate DeepSeek runtime identifier.",
-            cause,
-          }),
-      ),
+    const locks = yield* makeThreadLockRegistry;
+    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+      locks.withThreadLock(threadId, effect);
+    const stamper = yield* makeEventStamper({
+      provider: PROVIDER,
+      detail: "Failed to generate DeepSeek runtime identifier.",
+    });
+    const nowIso = stamper.nowIso;
+    const randomUUIDv4 = stamper.randomUUIDv4;
+    const makeEventStamp = stamper.makeEventStamp;
+    const mapAcpCallbackFailure = makeExtensionFailureMapper(
+      "Failed to process DeepSeek ACP callback.",
     );
-    const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
-    const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const mapAcpCallbackFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new EffectAcpErrors.AcpTransportError({
-              detail: "Failed to process DeepSeek ACP callback.",
-              cause,
-            }),
-        ),
-      );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const signalTurnLiveness = (ctx: DeepSeekSessionContext, turnId: TurnId) =>
       Queue.offer(ctx.livenessSignals, { turnId }).pipe(Effect.asVoid);
@@ -800,17 +744,7 @@ export function makeDeepSeekAdapter(
         );
       });
 
-    const requireSession = (
-      threadId: ThreadId,
-    ): Effect.Effect<DeepSeekSessionContext, ProviderAdapterSessionNotFoundError> => {
-      const ctx = sessions.get(threadId);
-      if (!ctx || ctx.stopped) {
-        return Effect.fail(
-          new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
-        );
-      }
-      return Effect.succeed(ctx);
-    };
+    const requireSession = requireScaffoldSession(sessions, PROVIDER);
 
     const stopSessionInternal = (ctx: DeepSeekSessionContext) =>
       Effect.gen(function* () {

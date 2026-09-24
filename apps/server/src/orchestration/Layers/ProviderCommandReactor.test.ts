@@ -16,7 +16,6 @@ import {
   ApprovalRequestId,
   CommandId,
   ComposerContextId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
   EventId,
   MessageId,
@@ -521,7 +520,6 @@ describe("ProviderCommandReactor", () => {
         projectId: asProjectId("project-1"),
         title: input?.initialTitle ?? "Thread",
         modelSelection: modelSelection,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         branch: null,
         worktreePath: null,
@@ -554,7 +552,6 @@ describe("ProviderCommandReactor", () => {
           projectId: asProjectId("project-1"),
           title: "Thread 2",
           modelSelection: modelSelection,
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
@@ -696,7 +693,6 @@ describe("ProviderCommandReactor", () => {
               sessionStatus === "new" ? instanceId : ProviderInstanceId.make("antigravity-other"),
             model: "gemini-3.1-pro",
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt,
         });
@@ -765,7 +761,6 @@ describe("ProviderCommandReactor", () => {
           text: "/logout",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       });
@@ -828,7 +823,6 @@ describe("ProviderCommandReactor", () => {
           text,
           attachments,
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       });
@@ -864,7 +858,6 @@ describe("ProviderCommandReactor", () => {
           text: "hello reactor",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -921,7 +914,6 @@ describe("ProviderCommandReactor", () => {
           text: "hello combo",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -970,7 +962,6 @@ describe("ProviderCommandReactor", () => {
             ],
           },
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       });
@@ -1007,7 +998,6 @@ describe("ProviderCommandReactor", () => {
           text: "Start after activation",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       });
@@ -1049,7 +1039,6 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         titleSeed: "Thread",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:01.000Z",
       });
@@ -1079,7 +1068,6 @@ describe("ProviderCommandReactor", () => {
           text: "/compact",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       });
@@ -1150,7 +1138,6 @@ describe("ProviderCommandReactor", () => {
               text,
               attachments: [],
             },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             runtimeMode: "approval-required",
             createdAt,
           });
@@ -1178,21 +1165,7 @@ describe("ProviderCommandReactor", () => {
         yield* dispatchTurn("blocked-compact", "/compact", "2026-01-01T00:00:01.000Z");
         yield* Deferred.await(readyDispatchStarted);
 
-        yield* harness.engine.dispatch({
-          type: "thread.interaction-mode.set",
-          commandId: CommandId.make("cmd-queued-mode-plan"),
-          threadId,
-          interactionMode: "plan",
-          createdAt: now,
-        });
         yield* dispatchTurn("during-compact-recovery", "first queued", "2026-01-01T00:00:02.000Z");
-        yield* harness.engine.dispatch({
-          type: "thread.interaction-mode.set",
-          commandId: CommandId.make("cmd-queued-mode-default"),
-          threadId,
-          interactionMode: "default",
-          createdAt: now,
-        });
         yield* dispatchTurn(
           "during-compact-recovery-2",
           "second queued",
@@ -1272,8 +1245,8 @@ describe("ProviderCommandReactor", () => {
         }
         yield* Deferred.await(queuedSent);
         expect(harness.sendTurn.mock.calls.slice(1).map(([request]) => request)).toEqual([
-          expect.objectContaining({ input: "first queued", interactionMode: "plan" }),
-          expect.objectContaining({ input: "second queued", interactionMode: "default" }),
+          expect.objectContaining({ input: "first queued" }),
+          expect.objectContaining({ input: "second queued" }),
         ]);
         const afterRestore = (yield* Effect.promise(() => harness.readModel())).threads.find(
           (entry) => entry.id === threadId,
@@ -1326,7 +1299,6 @@ describe("ProviderCommandReactor", () => {
             text: "/compact",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt,
         });
@@ -1341,7 +1313,6 @@ describe("ProviderCommandReactor", () => {
           text: "hello",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       });
@@ -1378,7 +1349,6 @@ describe("ProviderCommandReactor", () => {
           text: "do not restart after stopping",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       });
@@ -1495,7 +1465,6 @@ describe("ProviderCommandReactor", () => {
           text: "start slowly",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       });
@@ -1540,7 +1509,6 @@ describe("ProviderCommandReactor", () => {
           text: "continue",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       });
@@ -1594,7 +1562,6 @@ describe("ProviderCommandReactor", () => {
           text: "fail once",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       });
@@ -1624,7 +1591,6 @@ describe("ProviderCommandReactor", () => {
           text: "retry",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:01.000Z",
       });
@@ -1660,7 +1626,6 @@ describe("ProviderCommandReactor", () => {
             text: "Fix this",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt,
         });
@@ -1757,7 +1722,6 @@ describe("ProviderCommandReactor", () => {
           text: "Fix this",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:01.000Z",
       });
@@ -1797,7 +1761,6 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         titleSeed: seededTitle,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -1847,7 +1810,6 @@ describe("ProviderCommandReactor", () => {
           text: "Please investigate reconnect regressions after restarting the session.",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -1942,7 +1904,6 @@ describe("ProviderCommandReactor", () => {
             },
           ],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -1966,7 +1927,6 @@ describe("ProviderCommandReactor", () => {
             },
           ],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:01.000Z",
       }),
@@ -1990,7 +1950,6 @@ describe("ProviderCommandReactor", () => {
             },
           ],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:02.000Z",
       }),
@@ -2089,7 +2048,6 @@ describe("ProviderCommandReactor", () => {
           text: "Investigate the reconnect state.",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2134,7 +2092,6 @@ describe("ProviderCommandReactor", () => {
           text: "Investigate the reconnect state.",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2184,7 +2141,6 @@ describe("ProviderCommandReactor", () => {
           text: "Investigate the reconnect state.",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2254,7 +2210,6 @@ describe("ProviderCommandReactor", () => {
             },
           ],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2328,7 +2283,6 @@ describe("ProviderCommandReactor", () => {
           text: "Investigate the reconnect state.",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2399,7 +2353,6 @@ describe("ProviderCommandReactor", () => {
           text: "Investigate the reconnect state.",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2455,7 +2408,6 @@ describe("ProviderCommandReactor", () => {
           text: "Investigate the reconnect state.",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2515,7 +2467,6 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         titleSeed: seededTitle,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2564,7 +2515,6 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         titleSeed: seededTitle,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2633,7 +2583,6 @@ describe("ProviderCommandReactor", () => {
           text: prompt,
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2680,7 +2629,6 @@ describe("ProviderCommandReactor", () => {
           text: "continue",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2717,7 +2665,6 @@ describe("ProviderCommandReactor", () => {
           { id: "reasoningEffort", value: "high" },
           { id: "fastMode", value: true },
         ]),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2765,7 +2712,6 @@ describe("ProviderCommandReactor", () => {
           "claude-sonnet-4-6",
           [{ id: "effort", value: "max" }],
         ),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2815,7 +2761,6 @@ describe("ProviderCommandReactor", () => {
           "claude-opus-4-6",
           [{ id: "fastMode", value: true }],
         ),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2840,44 +2785,6 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("forwards plan interaction mode to the provider turn request", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.interaction-mode.set",
-        commandId: CommandId.make("cmd-interaction-mode-set-plan"),
-        threadId: ThreadId.make("thread-1"),
-        interactionMode: "plan",
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-plan"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-plan"),
-          role: "user",
-          text: "plan this change",
-          attachments: [],
-        },
-        interactionMode: "plan",
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      threadId: ThreadId.make("thread-1"),
-      interactionMode: "plan",
-    });
-  });
-
   it("preserves the active session model when in-session model switching is unsupported", async () => {
     const harness = await createHarness({ sessionModelSwitch: "unsupported" });
     const now = "2026-01-01T00:00:00.000Z";
@@ -2893,7 +2800,6 @@ describe("ProviderCommandReactor", () => {
           text: "first",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2912,7 +2818,6 @@ describe("ProviderCommandReactor", () => {
           text: "second",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -2948,7 +2853,6 @@ describe("ProviderCommandReactor", () => {
             text: "first",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: now,
         });
@@ -2969,7 +2873,6 @@ describe("ProviderCommandReactor", () => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5.1-codex",
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: now,
         });
@@ -3024,7 +2927,6 @@ describe("ProviderCommandReactor", () => {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           model: "claude-opus-4-6",
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3066,7 +2968,6 @@ describe("ProviderCommandReactor", () => {
           text: "first",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3086,7 +2987,6 @@ describe("ProviderCommandReactor", () => {
           text: "second",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3116,7 +3016,6 @@ describe("ProviderCommandReactor", () => {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3139,7 +3038,6 @@ describe("ProviderCommandReactor", () => {
           instanceId: ProviderInstanceId.make("codex_work"),
           model: "gpt-5-codex",
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       }),
@@ -3179,7 +3077,6 @@ describe("ProviderCommandReactor", () => {
           text: "first in project root",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3211,7 +3108,6 @@ describe("ProviderCommandReactor", () => {
           text: "second in worktree",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3257,7 +3153,6 @@ describe("ProviderCommandReactor", () => {
           "claude-sonnet-4-6",
           [{ id: "effort", value: "medium" }],
         ),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3282,7 +3177,6 @@ describe("ProviderCommandReactor", () => {
           "claude-sonnet-4-6",
           [{ id: "effort", value: "max" }],
         ),
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3325,7 +3219,6 @@ describe("ProviderCommandReactor", () => {
           text: "first",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "full-access",
         createdAt: now,
       }),
@@ -3361,7 +3254,6 @@ describe("ProviderCommandReactor", () => {
           text: "second",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "full-access",
         createdAt: now,
       }),
@@ -3458,7 +3350,6 @@ describe("ProviderCommandReactor", () => {
           text: "first",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "full-access",
         createdAt: now,
       }),
@@ -3513,7 +3404,6 @@ describe("ProviderCommandReactor", () => {
           text: "first",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3537,7 +3427,6 @@ describe("ProviderCommandReactor", () => {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           model: "claude-opus-4-6",
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3608,7 +3497,6 @@ describe("ProviderCommandReactor", () => {
           instanceId: ProviderInstanceId.make("claudeAgent"),
           model: "claude-opus-4-6",
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3919,7 +3807,6 @@ describe("ProviderCommandReactor", () => {
           text: "resume codex",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
@@ -3984,7 +3871,6 @@ describe("ProviderCommandReactor", () => {
           text: "resume codex",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),

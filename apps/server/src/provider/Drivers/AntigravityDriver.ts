@@ -74,7 +74,15 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
   metadata: { displayName: "Antigravity", supportsMultipleInstances: true },
   configSchema: AntigravitySettings,
   defaultConfig: () => decodeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -108,6 +116,8 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend: undefined,
+        nativeFallback,
       });
       // Google returns every model the account can use, including older
       // Gemini generations. The manifest names the current ones so the picker

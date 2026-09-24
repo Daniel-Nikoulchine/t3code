@@ -29,6 +29,7 @@ const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, strin
   [ProviderDriverKind.make("cursor")]: "claude-sonnet-4-6",
   [ProviderDriverKind.make("hermes")]: "openrouter:anthropic/claude-sonnet-4.6",
   [ProviderDriverKind.make("kilo")]: "kilo/anthropic/claude-sonnet-4.6",
+  [ProviderDriverKind.make("minimax")]: "MiniMax-M3",
   [ProviderDriverKind.make("opencode")]: "openai/gpt-5",
   [ProviderDriverKind.make("pi")]: "openai/gpt-5-nano",
 };
@@ -140,6 +141,12 @@ interface ProviderModelsSectionProps {
   /** Explicit user-authored model ordering for this provider instance. */
   readonly modelOrder: ReadonlyArray<string>;
   /**
+   * Display name of the shared API connection this instance is attached to.
+   * Connection-served models (`viaConnection`) render a "via …" badge with
+   * it; absent renders a generic "via connection" badge.
+   */
+  readonly connectionLabel?: string | undefined;
+  /**
    * Commit the new custom-model list. Caller is responsible for routing the
    * write to the correct storage (legacy `settings.providers[kind]` vs.
    * `providerInstances[id].config`).
@@ -169,6 +176,7 @@ export function ProviderModelsSection({
   hiddenModels,
   favoriteModels,
   modelOrder,
+  connectionLabel,
   onChange,
   onHiddenModelsChange,
   onFavoriteModelsChange,
@@ -384,7 +392,7 @@ export function ProviderModelsSection({
           </Tooltip>
         </>
       ) : null}
-      {model.isCustom ? (
+      {model.isCustom && model.viaConnection !== true ? (
         <>
           <Tooltip>
             <TooltipTrigger
@@ -483,8 +491,23 @@ export function ProviderModelsSection({
               {model.slug}
             </code>
           ) : null}
-          {model.isCustom ? (
+          {model.isCustom && model.viaConnection !== true ? (
             <span className="text-[11px] text-muted-foreground/70">custom</span>
+          ) : null}
+          {model.viaConnection === true ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className="cursor-default truncate text-[11px] text-foreground/60 underline decoration-dotted underline-offset-2">
+                    via {connectionLabel?.trim() || "connection"}
+                  </span>
+                }
+              />
+              <TooltipPopup side="top">
+                Served through the shared API connection — the rest runs on this instance's own
+                login.
+              </TooltipPopup>
+            </Tooltip>
           ) : null}
         </span>
         {/*

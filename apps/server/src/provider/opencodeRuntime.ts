@@ -35,6 +35,12 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
+import {
+  BACKEND_BUCKET_PROVIDER_ID,
+  DEFAULT_BACKEND_PROTOCOLS,
+  isNativeBackend,
+  stripBackendBucketPrefix,
+} from "./ModelBackendEnvironment.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -69,7 +75,7 @@ export function resolveOpenCodeConfigContent(
  * `session.promptAsync` and surface in the provider inventory as
  * `t3-backend/<slug>`.
  */
-export const OPENCODE_BACKEND_PROVIDER_ID = "t3-backend";
+export const OPENCODE_BACKEND_PROVIDER_ID = BACKEND_BUCKET_PROVIDER_ID;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -96,10 +102,10 @@ export function mergeOpenCodeBackendConfigContent(input: {
   readonly apiKey: string | undefined;
 }): string | undefined {
   const backend = input.backend;
-  if (backend.kind === "native" || backend.baseUrl === undefined || backend.baseUrl.length === 0) {
+  if (isNativeBackend(backend) || backend.baseUrl === undefined || backend.baseUrl.length === 0) {
     return undefined;
   }
-  const protocols = backend.protocols ?? ["openai", "anthropic"];
+  const protocols = backend.protocols ?? DEFAULT_BACKEND_PROTOCOLS;
   const npmPackage = protocols.includes("openai")
     ? "@ai-sdk/openai-compatible"
     : protocols.includes("anthropic")
@@ -130,8 +136,21 @@ export function mergeOpenCodeBackendConfigContent(input: {
       baseURL: backend.baseUrl,
       ...(input.apiKey !== undefined && input.apiKey.length > 0 ? { apiKey: input.apiKey } : {}),
     },
+    // Connection model lists are hand-authored and may hold slugs already
+    // copied from the picker with the harness bucket prefix — strip it so
+    // the harness never registers `t3-backend/t3-backend/<slug>` ids.
     ...(backend.models !== undefined && backend.models.length > 0
-      ? { models: Object.fromEntries(backend.models.map((slug) => [slug, { name: slug }])) }
+      ? {
+          models: Object.fromEntries(
+            [
+              ...new Set(
+                backend.models
+                  .map((slug) => stripBackendBucketPrefix(slug))
+                  .filter((slug) => slug.length > 0),
+              ),
+            ].map((slug) => [slug, { name: slug }]),
+          ),
+        }
       : {}),
   };
 
@@ -368,6 +387,14 @@ const AGENT_HEADER_RE = /^(.+)\s+\((\S+)\)\s*$/;
 // does not expose the hidden flag. Keep in sync with OpenCode agent
 // definitions (in the OpenCode repo: packages/opencode/src/agent/agent.ts).
 const KNOWN_HIDDEN_AGENTS = new Set(["compaction", "summary", "title"]);
+
+/**
+ * Agents T3 never offers as model options even though OpenCode reports them
+ * as ordinary primary agents. `plan` is OpenCode's plan agent; T3 has no
+ * plan mode, so the composer must not advertise one. Kept separate from
+ * `KNOWN_HIDDEN_AGENTS` because OpenCode itself does not hide it.
+ */
+export const UNSUPPORTED_OPENCODE_AGENTS: ReadonlySet<string> = new Set(["plan"]);
 
 /** @internal */
 export function parseModelsCliOutput(stdout: string): {

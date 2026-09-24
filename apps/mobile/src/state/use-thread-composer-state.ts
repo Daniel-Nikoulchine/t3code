@@ -5,13 +5,11 @@ import { Alert } from "react-native";
 
 import {
   CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type EnvironmentId,
   type ModelSelection,
-  type ProviderInteractionMode,
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -30,7 +28,6 @@ import { uuidv4 } from "../lib/uuid";
 
 import { makeQueuedMessageMetadata } from "../lib/commandMetadata";
 import { isModelSelectionUnavailable } from "../lib/modelOptions";
-import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
 import {
   convertPastedImagesToAttachments,
   createPastedTextComposerAttachment,
@@ -246,15 +243,6 @@ export function useThreadComposerState() {
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
-  const selectedProvider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-    (provider) => provider.instanceId === modelSelection?.instanceId,
-  );
-  const interactionMode = selectedThread
-    ? resolveProviderInteractionMode(
-        selectedProvider,
-        selectedDraft?.interactionMode ?? selectedThread.interactionMode,
-      )
-    : null;
 
   const selectedThreadSessionActivity = useMemo(() => {
     const selectedThread = selectedThreadDetail ?? selectedThreadShell;
@@ -263,7 +251,7 @@ export function useThreadComposerState() {
     }
 
     return {
-      orchestrationStatus: selectedThread.session.status,
+      status: selectedThread.session.status,
       activeTurnId: selectedThread.session.activeTurnId ?? undefined,
     };
   }, [selectedThreadDetail, selectedThreadShell]);
@@ -446,10 +434,6 @@ export function useThreadComposerState() {
       context: draft.context,
       modelSelection,
       runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
-      interactionMode: resolveProviderInteractionMode(
-        provider,
-        draft.interactionMode ?? thread.interactionMode,
-      ),
       createdAt: metadata.createdAt,
     });
     clearComposerDraftContent(threadKey, { deferAttachmentCleanup: true });
@@ -754,17 +738,11 @@ export function useThreadComposerState() {
       if (!selectedThreadKey) {
         return;
       }
-      const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-        (candidate) => candidate.instanceId === value.instanceId,
-      );
       updateComposerDraftSettings(selectedThreadKey, {
         modelSelection: value,
-        ...(provider?.showInteractionModeToggle === false
-          ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
-          : {}),
       });
     },
-    [selectedEnvironmentRuntime?.serverConfig, selectedThreadKey],
+    [selectedThreadKey],
   );
 
   const onUpdateRuntimeMode = useCallback(
@@ -775,24 +753,6 @@ export function useThreadComposerState() {
       updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
     },
     [selectedThreadKey],
-  );
-
-  const onUpdateInteractionMode = useCallback(
-    (value: ProviderInteractionMode) => {
-      if (!selectedThreadKey) {
-        return;
-      }
-      const modelSelection =
-        getComposerDraftSnapshot(selectedThreadKey).modelSelection ??
-        selectedThread?.modelSelection;
-      const provider = selectedEnvironmentRuntime?.serverConfig?.providers.find(
-        (candidate) => candidate.instanceId === modelSelection?.instanceId,
-      );
-      updateComposerDraftSettings(selectedThreadKey, {
-        interactionMode: resolveProviderInteractionMode(provider, value),
-      });
-    },
-    [selectedEnvironmentRuntime?.serverConfig, selectedThread?.modelSelection, selectedThreadKey],
   );
 
   return {
@@ -808,7 +768,6 @@ export function useThreadComposerState() {
     draftAttachments,
     modelSelection,
     runtimeMode,
-    interactionMode,
     onChangeDraftMessage,
     onPickDraftMedia,
     onPickDraftFiles,
@@ -819,6 +778,5 @@ export function useThreadComposerState() {
     onSendMessage,
     onUpdateModelSelection,
     onUpdateRuntimeMode,
-    onUpdateInteractionMode,
   };
 }

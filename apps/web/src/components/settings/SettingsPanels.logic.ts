@@ -286,7 +286,7 @@ export function buildProviderInstanceUpdatePatch(input: {
 }
 
 // ── Background-activity interval helpers ─────────────────────────────
-// Shared by the General panel's interval rows and the Providers panel's
+// Shared by the General panel's interval rows and the harness editor's
 // health-check row.
 
 export const PROVIDER_HEALTH_INTERVAL_STEP_SECONDS = 30;

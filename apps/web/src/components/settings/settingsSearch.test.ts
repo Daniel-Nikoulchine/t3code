@@ -46,9 +46,18 @@ const ITEMS: ReadonlyArray<SettingsSearchItem> = [
 ];
 
 describe("searchSettings", () => {
-  it("points the single providers section at the merged providers route", () => {
-    expect(SETTINGS_SECTION_LABELS["/settings/providers"]).toBe("Providers");
-    expect(SETTINGS_SECTION_LABELS).not.toHaveProperty("/settings/harness");
+  it("finds the default harness in general settings", () => {
+    expect(searchSettings("default harness")).toContainEqual(
+      expect.objectContaining({
+        id: "default-harness",
+        to: "/settings/general",
+        scope: "project-defaults",
+      }),
+    );
+  });
+  it("labels the providers and harness sections on their own routes", () => {
+    expect(SETTINGS_SECTION_LABELS["/settings/providers"]).toBe("Provider");
+    expect(SETTINGS_SECTION_LABELS["/settings/harness"]).toBe("Harness");
   });
 
   it("matches titles, sections, and remembered setting details", () => {
@@ -139,11 +148,11 @@ describe("searchSettings", () => {
   it("finds the instance editor via proxy terms and the connections list via global proxy", () => {
     expect(searchSettings("use proxy")[0]).toMatchObject({
       id: "providers",
-      to: "/settings/providers",
+      to: "/settings/harness",
     });
     expect(searchSettings("use provider")[0]).toMatchObject({
       id: "providers",
-      to: "/settings/providers",
+      to: "/settings/harness",
     });
     expect(searchSettings("proxy").map((item) => item.id)).toContain("provider-backends");
     expect(searchSettings("global proxy")[0]).toMatchObject({
@@ -159,32 +168,20 @@ describe("searchSettings", () => {
       to: "/settings/providers",
     });
   });
-  it("keeps instance discovery on the merged Providers tab", () => {
+  it("keeps instance discovery on the Harness tab", () => {
     expect(searchSettings("binary path")[0]).toMatchObject({
       id: "providers",
-      to: "/settings/providers",
+      to: "/settings/harness",
     });
     expect(searchSettings("Antigravity")[0]).toMatchObject({
       id: "providers",
-      to: "/settings/providers",
+      to: "/settings/harness",
     });
   });
 
-  it("finds the new provider sections", () => {
+  it("finds the provider connection section", () => {
     expect(searchSettings("stored api key")[0]).toMatchObject({
-      id: "provider-credentials",
-      to: "/settings/providers",
-    });
-    expect(searchSettings("models matrix")[0]).toMatchObject({
-      id: "model-catalog",
-      to: "/settings/providers",
-    });
-    expect(searchSettings("routing rules")[0]).toMatchObject({
-      id: "model-router",
-      to: "/settings/providers",
-    });
-    expect(searchSettings("upstream model")[0]).toMatchObject({
-      id: "model-router",
+      id: "provider-backends",
       to: "/settings/providers",
     });
   });
@@ -233,9 +230,6 @@ describe("searchSettings", () => {
       "git-fetch-interval",
       "network-access",
       "provider-backends",
-      "provider-credentials",
-      "model-catalog",
-      "model-router",
       "publish-agent-activity",
       "provider-health-check-interval",
       "source-control-writer-model",
@@ -441,9 +435,6 @@ describe("settings search targets", () => {
     const streaming = getSettingsSearchTargetScope("response-streaming")!;
     expect(streaming.scope).toBe("project-defaults");
     expect(isSettingsSearchScopeAvailable(streaming.scope, "project")).toBe(true);
-    for (const id of ["legacy-plan-mode", "legacy-context-window-indicator", "legacy-sidebar"]) {
-      expect(getSettingsSearchTargetScope(id)!.scope).toBeNull();
-    }
   });
 });
 

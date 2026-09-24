@@ -42,7 +42,6 @@ describe("canonicalizeClientCommandTimestamps", () => {
         attachments: [],
       },
       runtimeMode: "full-access",
-      interactionMode: "default",
       bootstrap: {
         createThread: {
           projectId: ProjectId.make("project-1"),
@@ -52,7 +51,6 @@ describe("canonicalizeClientCommandTimestamps", () => {
             model: "gpt-5.4",
           },
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: clientCreatedAt,

@@ -117,4 +117,47 @@ describe("buildProviderInstanceRows", () => {
       isDefault: true,
     });
   });
+
+  it("renders every known driver including Pi, Hermes, and DeepSeek", () => {
+    const piDriver = ProviderDriverKind.make("pi");
+    const piId = ProviderInstanceId.make("pi");
+    const hermesDriver = ProviderDriverKind.make("hermes");
+    const hermesId = ProviderInstanceId.make("hermes");
+    const deepseekDriver = ProviderDriverKind.make("deepseek");
+    const deepseekId = ProviderInstanceId.make("deepseek");
+    const settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [piId]: { driver: piDriver, enabled: true },
+        [hermesId]: { driver: hermesDriver, enabled: true },
+        [deepseekId]: { driver: deepseekDriver, enabled: true },
+      },
+    };
+    const snapshotFor = (
+      instanceId: ProviderInstanceId,
+      driver: ProviderDriverKind,
+    ): ServerProvider => ({
+      instanceId,
+      driver,
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "unknown" },
+      checkedAt: "2026-07-24T12:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    });
+    const serverProviders: ReadonlyArray<ServerProvider> = [
+      snapshotFor(piId, piDriver),
+      snapshotFor(hermesId, hermesDriver),
+      snapshotFor(deepseekId, deepseekDriver),
+    ];
+    const harnessRows = buildProviderInstanceRows({ settings, serverProviders });
+    expect(harnessRows.some((row) => row.driver === piDriver)).toBe(true);
+    expect(harnessRows.some((row) => row.driver === hermesDriver)).toBe(true);
+    expect(harnessRows.some((row) => row.driver === deepseekDriver)).toBe(true);
+    expect(harnessRows.some((row) => row.instanceId === codexId)).toBe(true);
+  });
 });

@@ -1,5 +1,6 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  ModelBackendConnectionId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -16,8 +17,6 @@ import {
   resolveAppModelSelectionForInstance,
   resolveAppModelSelectionState,
   resolveHarnessSwitchModel,
-  resolvePlanAgentHealPatch,
-  withoutPlanAgentSelection,
 } from "./modelSelection";
 
 function provider(input: {
@@ -67,6 +66,82 @@ function settingsWithProviderInstances(): UnifiedSettings {
 }
 
 describe("instance-scoped model selection", () => {
+  it("lists router routes on t3-router-linked instances and resolves them", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: ["gpt-5.5"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        ...settingsWithProviderInstances().providerInstances,
+        [ProviderInstanceId.make("codex")]: {
+          driver: ProviderDriverKind.make("codex"),
+          connectionId: ModelBackendConnectionId.make("t3-router"),
+          config: { customModels: [] },
+        },
+      },
+      modelRouterRoutes: {
+        "gpt-5.6-luna": {
+          target: {
+            kind: "connection",
+            connectionId: ModelBackendConnectionId.make("openai-oauth"),
+          },
+        },
+      },
+    };
+    const codex = deriveProviderInstanceEntries(providers)[0]!;
+
+    const options = getAppModelOptionsForInstance(settings, codex);
+    expect(options.map((option) => option.slug)).toContain("gpt-5.6-luna");
+    expect(options.find((option) => option.slug === "gpt-5.6-luna")?.subProvider).toBe(
+      "openai-oauth",
+    );
+    expect(
+      resolveAppModelSelectionForInstance(
+        ProviderInstanceId.make("codex"),
+        settings,
+        providers,
+        "gpt-5.6-luna",
+      ),
+    ).toBe("gpt-5.6-luna");
+  });
+
+  it("never labels connection models with the harness backend bucket", () => {
+    const providers = [
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: ["gpt-5.5"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        ...settingsWithProviderInstances().providerInstances,
+        [ProviderInstanceId.make("codex")]: {
+          driver: ProviderDriverKind.make("codex"),
+          connectionId: ModelBackendConnectionId.make("t3-backend"),
+          config: { customModels: [] },
+        },
+      },
+      modelBackendConnections: {
+        [ModelBackendConnectionId.make("t3-backend")]: {
+          baseUrl: "http://127.0.0.1:20128/openai",
+          protocols: ["openai", "anthropic"],
+          models: ["probe-go"],
+        },
+      },
+    };
+    const codex = deriveProviderInstanceEntries(providers)[0]!;
+
+    const options = getAppModelOptionsForInstance(settings, codex);
+    expect(options.find((option) => option.slug === "probe-go")?.subProvider).toBeUndefined();
+  });
+
   it("preserves server-provided legacy model metadata", () => {
     const baseProvider = provider({
       instanceId: "claudeAgent",
@@ -230,6 +305,80 @@ describe("instance-scoped model selection", () => {
     expect(getAppModelOptionsForInstance(settings, stock).map((option) => option.slug)).toEqual([
       "claude-sonnet-4-6",
     ]);
+  });
+
+  it("includes the linked model backend connection's models in the owning instance's options", () => {
+    const providers = [
+      provider({ instanceId: "codex", models: ["gpt-5.6-sol"] }),
+      provider({ instanceId: "codex_personal", models: ["gpt-5.6-sol"] }),
+    ];
+    const entries = deriveProviderInstanceEntries(providers);
+    const stock = entries.find((entry) => entry.instanceId === "codex")!;
+    const personal = entries.find((entry) => entry.instanceId === "codex_personal")!;
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: {
+        ...settingsWithProviderInstances().providerInstances,
+        [ProviderInstanceId.make("codex")]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: { customModels: [] },
+          connectionId: ModelBackendConnectionId.make("relay"),
+        },
+      },
+      modelBackendConnections: {
+        [ModelBackendConnectionId.make("relay")]: {
+          baseUrl: "https://relay.example/v1",
+          protocols: ["openai", "anthropic"],
+          models: ["relay-model", "gpt-5.6-sol"],
+        },
+      },
+    };
+
+    const stockSlugs = getAppModelOptionsForInstance(settings, stock).map((option) => option.slug);
+    expect(stockSlugs).toContain("relay-model");
+    expect(stockSlugs.filter((slug) => slug === "gpt-5.6-sol")).toHaveLength(1);
+    expect(
+      getAppModelOptionsForInstance(settings, stock).find((option) => option.slug === "relay-model")
+        ?.subProvider,
+    ).toBe("relay");
+    expect(
+      getAppModelOptionsForInstance(settings, personal).map((option) => option.slug),
+    ).not.toContain("relay-model");
+  });
+
+  it("resolves an explicitly selected model that the user hid from the picker list", () => {
+    const providers = [provider({ instanceId: "codex", models: ["gpt-5.6-sol", "gpt-5.6-luna"] })];
+    const stock = deriveProviderInstanceEntries(providers).find(
+      (entry) => entry.instanceId === "codex",
+    )!;
+    const settings: UnifiedSettings = {
+      ...settingsWithProviderInstances(),
+      providerModelPreferences: {
+        [ProviderInstanceId.make("codex")]: {
+          hiddenModels: ["gpt-5.6-sol", "gpt-5.6-luna"],
+          modelOrder: [],
+        },
+      },
+    };
+
+    expect(getAppModelOptionsForInstance(settings, stock)).toHaveLength(0);
+    expect(
+      resolveAppModelSelectionForInstance(
+        ProviderInstanceId.make("codex"),
+        settings,
+        providers,
+        "gpt-5.6-sol",
+      ),
+    ).toBeNull();
+    expect(
+      resolveAppModelSelectionForInstance(
+        ProviderInstanceId.make("codex"),
+        settings,
+        providers,
+        "gpt-5.6-sol",
+        { includeHiddenModels: true },
+      ),
+    ).toBe("gpt-5.6-sol");
   });
 
   it("drops server-reported custom rows that are no longer in settings", () => {
@@ -534,7 +683,6 @@ describe("instance-scoped model selection", () => {
       model: state.selectedModel,
       models: providers[0]!.models,
       modelOptions: state.modelOptions?.[instanceId],
-      planModeEnabled: false,
     });
 
     expect(state.selectedModel).toBe("gpt-5.6-sol");
@@ -741,7 +889,6 @@ describe("instance-scoped model selection", () => {
       model: state.selectedModel,
       models: providers[0]!.models,
       modelOptions: state.modelOptions?.[instanceId],
-      planModeEnabled: false,
     });
 
     expect(
@@ -779,7 +926,6 @@ describe("instance-scoped model selection", () => {
       model: state.selectedModel,
       models: providers[1]!.models,
       modelOptions: state.modelOptions?.[instanceId],
-      planModeEnabled: false,
     });
 
     expect(
@@ -834,85 +980,6 @@ describe("instance-scoped model selection", () => {
     expect(resolveAppModelSelectionState(settings, [unsupported])).toEqual(
       NO_PROVIDER_MODEL_SELECTION,
     );
-  });
-});
-
-describe("withoutPlanAgentSelection", () => {
-  const instance = ProviderInstanceId.make("opencode");
-  const model = "opencode/gpt-5.4";
-
-  it("drops a stored plan agent option", () => {
-    const selection = createModelSelection(instance, model, [
-      { id: "variant", value: "high" },
-      { id: "agent", value: "plan" },
-    ]);
-    expect(withoutPlanAgentSelection(selection)).toEqual(
-      createModelSelection(instance, model, [{ id: "variant", value: "high" }]),
-    );
-  });
-
-  it("keeps non-plan agent options", () => {
-    const selection = createModelSelection(instance, model, [{ id: "agent", value: "build" }]);
-    expect(withoutPlanAgentSelection(selection)).toBe(selection);
-  });
-
-  it("omits options entirely when plan was the only stored option", () => {
-    const selection = createModelSelection(instance, model, [{ id: "agent", value: "plan" }]);
-    expect(withoutPlanAgentSelection(selection)).toEqual({ instanceId: instance, model });
-  });
-
-  it("returns null and undefined selections unchanged", () => {
-    expect(withoutPlanAgentSelection(null)).toBeNull();
-    expect(withoutPlanAgentSelection(undefined)).toBeUndefined();
-  });
-});
-
-describe("resolvePlanAgentHealPatch", () => {
-  const instance = ProviderInstanceId.make("opencode");
-  const model = "opencode/gpt-5.4";
-  const healed = createModelSelection(instance, model, [{ id: "variant", value: "high" }]);
-  const storedPlan = createModelSelection(instance, model, [
-    { id: "variant", value: "high" },
-    { id: "agent", value: "plan" },
-  ]);
-  const nullPatch = {
-    planModeEnabled: true,
-    textGenerationModelSelection: storedPlan,
-    sourceControlWriterModelSelection: null,
-  };
-
-  it("returns null when plan mode is on", () => {
-    expect(resolvePlanAgentHealPatch(nullPatch)).toBeNull();
-  });
-
-  it("returns null when nothing needs healing", () => {
-    expect(
-      resolvePlanAgentHealPatch({
-        planModeEnabled: false,
-        textGenerationModelSelection: healed,
-        sourceControlWriterModelSelection: null,
-      }),
-    ).toBeNull();
-  });
-
-  it("patches the stored text generation selection to drop the plan agent", () => {
-    expect(
-      resolvePlanAgentHealPatch({
-        planModeEnabled: false,
-        textGenerationModelSelection: storedPlan,
-        sourceControlWriterModelSelection: null,
-      }),
-    ).toEqual({ textGenerationModelSelection: healed });
-  });
-
-  it("patches a stored source control writer selection that uses the plan agent", () => {
-    expect(
-      resolvePlanAgentHealPatch({
-        planModeEnabled: false,
-        textGenerationModelSelection: healed,
-        sourceControlWriterModelSelection: storedPlan,
-      }),
-    ).toEqual({ sourceControlWriterModelSelection: healed });
   });
 });
 

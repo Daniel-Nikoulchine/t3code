@@ -2,35 +2,17 @@
 
 import { Spinner } from "~/components/ui/spinner";
 
-import {
-  ArrowUpCircleIcon,
-  CopyIcon,
-  DownloadIcon,
-  LockIcon,
-  LockOpenIcon,
-  PlusIcon,
-  Trash2Icon,
-  XIcon,
-} from "lucide-react";
-import * as Arr from "effect/Array";
-import * as Result from "effect/Result";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowUpCircleIcon, CopyIcon, DownloadIcon, Trash2Icon } from "lucide-react";
+import type { ReactNode } from "react";
 import {
   resolveProviderInstanceEnabled,
-  T3_ROUTER_CONNECTION_ID,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
   type ServerProvider,
-  type ServerProviderModel,
 } from "@t3tools/contracts";
 
-import {
-  type CustomModelDefinition,
-  readCustomModelEntries,
-  toCustomModelSetting,
-} from "@t3tools/shared/model";
-import type { ModelProxyConfig } from "@t3tools/contracts";
+import { type CustomModelDefinition, toCustomModelSetting } from "@t3tools/shared/model";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
@@ -42,20 +24,21 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { DriverOption } from "./providerDriverMeta";
-import { ProviderSettingsForm } from "./ProviderSettingsForm";
+import { ProviderEnvironmentSection } from "./ProviderEnvironmentSection";
+import {
+  deriveProviderModelsForDisplay,
+  nextConfigBlobWithValue,
+  readConfigCustomModels,
+} from "./providerInstanceCard.logic";
 import { ProviderModelsSection } from "./ProviderModelsSection";
+import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import {
   ProviderInstanceTitleIcon,
   resolveProviderInstanceTitle,
 } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import {
-  nextInstanceWithConnectionId,
-  resolveInstanceConnectionState,
-} from "./providerBackend.logic";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -63,116 +46,6 @@ import {
   getProviderVersionLabel,
   type ProviderStatusKey,
 } from "./providerStatus";
-
-const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
-
-let environmentVariableDraftId = 0;
-const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
-
-type EnvironmentDraftRow = {
-  readonly id: string;
-  readonly name: string;
-  readonly value: string;
-  readonly sensitive: boolean;
-  readonly valueRedacted?: boolean;
-};
-
-function makeEnvironmentDraftRow(
-  variable: ProviderInstanceEnvironmentVariable,
-  index: number,
-): EnvironmentDraftRow {
-  return {
-    id: `${index}:${variable.name}`,
-    name: variable.name,
-    value: variable.value,
-    sensitive: variable.sensitive,
-    ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
-  };
-}
-
-function providerEnvironmentsEqual(
-  left: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
-  right: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((variable, index) => {
-      const other = right[index];
-      return (
-        other !== undefined &&
-        variable.name === other.name &&
-        variable.value === other.value &&
-        variable.sensitive === other.sensitive &&
-        variable.valueRedacted === other.valueRedacted
-      );
-    })
-  );
-}
-
-/**
- * Read `customModels` from the opaque config blob. The concrete driver
- * schemas type it as `CustomModelSetting[]`, but it arrives here as
- * `Schema.Unknown`, so the shared reader does the shape checking.
- */
-function readConfigCustomModels(config: unknown): ReadonlyArray<CustomModelDefinition> {
-  if (config === null || typeof config !== "object") return [];
-  return readCustomModelEntries((config as Record<string, unknown>).customModels);
-}
-
-/**
- * Read `shadowHomePath` from the opaque config blob (codex instances keep
- * their per-account home there; see `CodexSettings` in contracts). Absent,
- * non-string, or blank reads as unset.
- */
-function readConfigShadowHomePath(config: unknown): string {
-  if (config === null || typeof config !== "object" || !("shadowHomePath" in config)) return "";
-  const value = (config as Record<string, unknown>).shadowHomePath;
-  return typeof value === "string" ? value.trim() : "";
-}
-
-/**
- * Set `key` to an arbitrary value on the opaque config blob. Unlike
- * provider settings field updates, does not drop empty-looking values — the
- * caller is responsible for deciding whether an empty array / empty
- * object should be stored explicitly (e.g. `customModels: []` is a
- * meaningful "user cleared their custom list" state distinct from
- * "driver default").
- */
-function nextConfigBlobWithValue(
-  config: unknown,
-  key: string,
-  value: unknown,
-): Record<string, unknown> {
-  const base: Record<string, unknown> =
-    config !== null && typeof config === "object" ? { ...(config as Record<string, unknown>) } : {};
-  base[key] = value;
-  return base;
-}
-
-/**
- * Custom rows come from current settings so name/descriptor edits show
- * instantly; a bare entry falls back to the live row's driver-default
- * capabilities (the server fills those in on its next probe).
- */
-export function deriveProviderModelsForDisplay(input: {
-  readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
-  readonly customModels: ReadonlyArray<CustomModelDefinition>;
-}): ReadonlyArray<ServerProviderModel> {
-  const liveCustomModelsBySlug = new Map(
-    Arr.filterMap(input.liveModels ?? [], (model) =>
-      model.isCustom ? Result.succeed([model.slug, model] as const) : Result.failVoid,
-    ),
-  );
-  const serverModels = input.liveModels?.filter((model) => !model.isCustom) ?? [];
-  const customModels = input.customModels.map((entry) => ({
-    slug: entry.slug,
-    name: entry.name,
-    isCustom: true,
-    capabilities:
-      entry.capabilities ?? liveCustomModelsBySlug.get(entry.slug)?.capabilities ?? null,
-  }));
-  return [...serverModels, ...customModels];
-}
 
 function ProviderAuthEmail(props: { readonly email: string | undefined }) {
   const email = props.email?.trim();
@@ -185,261 +58,6 @@ function ProviderAuthEmail(props: { readonly email: string | undefined }) {
       revealTooltip="Click to reveal email"
       hideTooltip="Click to hide email"
       className="max-w-full truncate"
-    />
-  );
-}
-
-function ProviderEnvironmentSection(props: {
-  readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
-  readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
-}) {
-  const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
-    props.environment.map(makeEnvironmentDraftRow),
-  );
-  const previousEnvironmentRef = useRef(props.environment);
-  const lastPublishedEnvironmentRef = useRef<
-    ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined
-  >(undefined);
-
-  useEffect(() => {
-    const previousEnvironment = previousEnvironmentRef.current;
-    const lastPublishedEnvironment = lastPublishedEnvironmentRef.current;
-    previousEnvironmentRef.current = props.environment;
-    lastPublishedEnvironmentRef.current = undefined;
-    if (
-      previousEnvironment === props.environment ||
-      providerEnvironmentsEqual(previousEnvironment, props.environment) ||
-      (lastPublishedEnvironment !== undefined &&
-        providerEnvironmentsEqual(lastPublishedEnvironment, props.environment))
-    ) {
-      return;
-    }
-    setRows(props.environment.map(makeEnvironmentDraftRow));
-  }, [props.environment]);
-
-  const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
-    const published: ProviderInstanceEnvironmentVariable[] = [];
-    for (const row of nextRows) {
-      const name = row.name.trim();
-      if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
-        if (
-          name.length > 0 ||
-          row.value.length > 0 ||
-          row.sensitive !== true ||
-          row.valueRedacted !== undefined
-        ) {
-          return;
-        }
-        continue;
-      }
-      const { id: _id, ...rest } = row;
-      published.push({ ...rest, name });
-    }
-    lastPublishedEnvironmentRef.current = published;
-    props.onChange(published);
-  };
-
-  const updateVariable = (id: string, patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
-    const nextRows = rows.map((row) =>
-      row.id === id
-        ? {
-            ...row,
-            ...patch,
-            ...(patch.value !== undefined ? { valueRedacted: false } : {}),
-          }
-        : row,
-    );
-    setRows(nextRows);
-    publishRows(nextRows);
-  };
-
-  const removeVariable = (id: string) => {
-    const nextRows = rows.filter((row) => row.id !== id);
-    setRows(nextRows);
-    publishRows(nextRows);
-  };
-
-  const addVariable = () =>
-    setRows([
-      ...rows,
-      {
-        id: nextEnvironmentVariableDraftId(),
-        name: "",
-        value: "",
-        sensitive: true,
-      },
-    ]);
-
-  return (
-    <SettingsRow
-      title="Variables"
-      description="API keys, base URLs, and other per-instance CLI settings."
-      control={
-        <Button type="button" size="sm" variant="outline" onClick={addVariable}>
-          <PlusIcon className="size-3" />
-          Add variable
-        </Button>
-      }
-    >
-      {rows.length > 0 ? (
-        <div className="mt-3 min-w-0 space-y-2 pb-2">
-          {rows.map((variable, index) => (
-            <div key={variable.id} className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <DraftInput
-                size="sm"
-                className="w-full min-w-0 font-mono sm:w-44 sm:shrink-0"
-                value={variable.name}
-                onCommit={(name) => updateVariable(variable.id, { name: name.trim() })}
-                placeholder="VARIABLE_NAME"
-                spellCheck={false}
-                aria-label={`Environment variable name ${index + 1}`}
-              />
-              <span className="hidden text-xs text-muted-foreground sm:inline" aria-hidden>
-                =
-              </span>
-              <DraftInput
-                size="sm"
-                className="min-w-0 flex-1 font-mono"
-                value={variable.valueRedacted ? "" : variable.value}
-                onCommit={(value) => updateVariable(variable.id, { value })}
-                type={variable.sensitive ? "password" : undefined}
-                autoComplete="off"
-                placeholder={
-                  variable.valueRedacted ? "Stored secret, enter a new value to replace" : "value"
-                }
-                spellCheck={false}
-                aria-label={`Environment variable value ${index + 1}`}
-              />
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      size="icon-micro"
-                      variant="ghost-muted"
-                      className={cn(
-                        "[--control-icon-color:currentColor]",
-                        variable.sensitive && "text-foreground",
-                      )}
-                      onClick={() => {
-                        const sensitive = !variable.sensitive;
-                        updateVariable(variable.id, {
-                          sensitive,
-                          ...(sensitive && variable.valueRedacted === undefined
-                            ? {}
-                            : { valueRedacted: sensitive ? variable.valueRedacted : false }),
-                        });
-                      }}
-                      aria-pressed={variable.sensitive}
-                      aria-label={`Mark environment variable ${variable.name || index + 1} as sensitive`}
-                    >
-                      {variable.sensitive ? (
-                        <LockIcon className="size-3" />
-                      ) : (
-                        <LockOpenIcon className="size-3" />
-                      )}
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="top">
-                  {variable.sensitive ? "Sensitive, stored separately" : "Plain text"}
-                </TooltipPopup>
-              </Tooltip>
-              <Button
-                type="button"
-                size="icon-micro"
-                variant="ghost-muted"
-                className="[--control-icon-color:currentColor] hover:text-destructive"
-                onClick={() => removeVariable(variable.id)}
-                aria-label={`Remove environment variable ${variable.name || index + 1}`}
-              >
-                <XIcon className="size-3" />
-              </Button>
-            </div>
-          ))}
-          <p className="text-xs text-muted-foreground">
-            Sensitive values are stored separately and never returned to the app.
-          </p>
-        </div>
-      ) : null}
-    </SettingsRow>
-  );
-}
-
-const DIRECT_CONNECTION_VALUE = "direct";
-
-/**
- * Label for the built-in routing entry. The registry injects the local
- * translation proxy under `T3_ROUTER_CONNECTION_ID` when an instance opts
- * in — it claims no endpoint here, so the label names the capability only.
- */
-const BUILT_IN_ROUTER_LABEL = "Built-in routing (T3 Router)";
-
-/**
- * Harness routing selection: Direct, the built-in T3 Router, plus every
- * named connection on the environment. Persists through the whole-map
- * instance patch (same pattern as `updateDisplayName`). A `connectionId`
- * whose entry is gone (deleted connection) routes natively — the row warns
- * in the plain style of the old no-provider hint, and picking anything
- * clears the orphan. The built-in router is not a settings entry, so it
- * never reads as one.
- */
-function ProviderConnectionRow({
-  instance,
-  connections,
-  displayName,
-  onSelect,
-}: {
-  readonly instance: ProviderInstanceConfig;
-  readonly connections: Readonly<Record<string, ModelProxyConfig>>;
-  readonly displayName: string;
-  readonly onSelect: (connectionId: string | null) => void;
-}) {
-  const state = resolveInstanceConnectionState(instance, connections);
-  const entries = Object.entries(connections);
-  const selectedLabel =
-    state.kind === "connected"
-      ? state.connectionId === T3_ROUTER_CONNECTION_ID
-        ? BUILT_IN_ROUTER_LABEL
-        : connections[state.connectionId]?.displayName?.trim() || state.connectionId
-      : "Direct";
-  return (
-    <SettingsRow
-      title="Provider"
-      description="Route this harness through a provider connection instead of its own login."
-      control={
-        <Select
-          value={state.kind === "connected" ? state.connectionId : DIRECT_CONNECTION_VALUE}
-          onValueChange={(next) => {
-            if (typeof next !== "string") return;
-            onSelect(next === DIRECT_CONNECTION_VALUE ? null : next);
-          }}
-        >
-          <SelectTrigger
-            size="sm"
-            className="w-full sm:w-56"
-            aria-label={`Provider connection for ${displayName}`}
-          >
-            <SelectValue>{selectedLabel}</SelectValue>
-          </SelectTrigger>
-          <SelectPopup align="start" alignItemWithTrigger={false}>
-            <SelectItem value={DIRECT_CONNECTION_VALUE}>Direct</SelectItem>
-            <SelectItem value={T3_ROUTER_CONNECTION_ID}>{BUILT_IN_ROUTER_LABEL}</SelectItem>
-            {entries.map(([connectionId, connection]) => (
-              <SelectItem key={connectionId} value={connectionId}>
-                {connection.displayName?.trim() || connectionId}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-      }
-      status={
-        state.kind === "orphan" ? (
-          <span>Provider deleted — pick another connection.</span>
-        ) : entries.length === 0 ? (
-          <span>No provider configured — set one up under Settings → Providers.</span>
-        ) : null
-      }
     />
   );
 }
@@ -478,12 +96,6 @@ interface ProviderInstanceCardProps {
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onRunUpdate?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
-  /**
-   * The environment's `ServerSettings.modelBackendConnections` for the
-   * provider selection below. Absent/empty reads as no connections: the card
-   * points at Settings → Providers instead of offering a choice.
-   */
-  readonly connections?: Readonly<Record<string, ModelProxyConfig>> | undefined;
 }
 
 /**
@@ -526,7 +138,6 @@ export function ProviderInstanceCard({
   onModelOrderChange,
   onRunUpdate,
   isUpdating = false,
-  connections,
 }: ProviderInstanceCardProps) {
   const enabled = resolveProviderInstanceEnabled(instance);
   // A locally disabled provider reads "Disabled" with a muted dot even if its
@@ -553,6 +164,19 @@ export function ProviderInstanceCard({
     driver: instance.driver,
     accentColor: instance.accentColor,
   });
+  // `driverKind` narrows `instance.driver` for callers that key on the
+  // closed `ProviderDriverKind` union (e.g. `normalizeModelSlug`'s alias
+  // table). Custom fork drivers pass through as `null` and those callers
+  // fall back to verbatim behaviour.
+  const customModels =
+    instance.driver === "antigravity" ? [] : readConfigCustomModels(instance.config);
+  // Server-returned models may lag behind settings writes. Treat probe
+  // models as the source for built-ins only; custom rows come directly
+  // from the current instance config so add/remove reflects immediately.
+  const modelsForDisplay = deriveProviderModelsForDisplay({
+    liveModels: liveProvider?.models,
+    customModels,
+  });
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
       toastManager.add({
@@ -572,19 +196,6 @@ export function ProviderInstanceCard({
     },
   });
 
-  // `driverKind` narrows `instance.driver` for callers that key on the
-  // closed `ProviderDriverKind` union (e.g. `normalizeModelSlug`'s alias
-  // table). Custom fork drivers pass through as `null` and those callers
-  // fall back to verbatim behaviour.
-  const customModels =
-    instance.driver === "antigravity" ? [] : readConfigCustomModels(instance.config);
-  // Server-returned models may lag behind settings writes. Treat probe
-  // models as the source for built-ins only; custom rows come directly
-  // from the current instance config so add/remove reflects immediately.
-  const modelsForDisplay = deriveProviderModelsForDisplay({
-    liveModels: liveProvider?.models,
-    customModels,
-  });
   const updateDisplayName = (value: string) => {
     const trimmed = value.trim();
     const { displayName: _omit, ...rest } = instance;
@@ -618,16 +229,6 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateCustomModels = (next: ReadonlyArray<CustomModelDefinition>) => {
-    const nextConfig = nextConfigBlobWithValue(
-      instance.config,
-      "customModels",
-      next.map(toCustomModelSetting),
-    );
-    const { config: _omit, ...rest } = instance;
-    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
-  };
-
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
     const { environment: _omit, ...rest } = instance;
@@ -638,18 +239,15 @@ export function ProviderInstanceCard({
     );
   };
 
-  const updateConnectionId = (value: string | null) => {
-    onUpdate(nextInstanceWithConnectionId(instance, value));
+  const updateCustomModels = (next: ReadonlyArray<CustomModelDefinition>) => {
+    const nextConfig = nextConfigBlobWithValue(
+      instance.config,
+      "customModels",
+      next.map(toCustomModelSetting),
+    );
+    const { config: _omit, ...rest } = instance;
+    onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
-
-  // Codex only honors a routed connection through its shadow-home overlay;
-  // without one it keeps talking to its native endpoint. A hint, not a
-  // blocker — the connection stays selectable and routing still applies to
-  // every other driver.
-  const showCodexShadowHomeHint =
-    instance.driver === "codex" &&
-    instance.connectionId !== undefined &&
-    readConfigShadowHomePath(instance.config).length === 0;
 
   const titleIconNode = (
     <ProviderInstanceTitleIcon
@@ -944,7 +542,45 @@ export function ProviderInstanceCard({
         />
       </SettingsSection>
 
-      {setup ? <SettingsSection title="Setup">{setup}</SettingsSection> : null}
+      {setup ? (
+        <SettingsSection
+          title="Setup"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          {setup}
+        </SettingsSection>
+      ) : null}
+
+      {driverOption !== undefined ? (
+        <SettingsSection
+          title="Models"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <div className="px-3 py-3 sm:px-4">
+            <p className="mb-3 text-xs text-muted-foreground">
+              Favorites, visibility, and ordering are saved on this device. Custom models are saved
+              on the selected environment.
+            </p>
+            <ProviderModelsSection
+              instanceId={instanceId}
+              driverKind={driverKind}
+              models={modelsForDisplay}
+              customModels={customModels}
+              hiddenModels={hiddenModels}
+              favoriteModels={favoriteModels}
+              modelOrder={modelOrder}
+              onChange={updateCustomModels}
+              onHiddenModelsChange={onHiddenModelsChange}
+              onFavoriteModelsChange={onFavoriteModelsChange}
+              onModelOrderChange={onModelOrderChange}
+            />
+          </div>
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection
         title="Runtime"
@@ -984,55 +620,6 @@ export function ProviderInstanceCard({
           environment={instance.environment ?? []}
           onChange={updateEnvironment}
         />
-      </SettingsSection>
-
-      {driverOption !== undefined ? (
-        <SettingsSection
-          title="Models"
-          inert={readOnly}
-          aria-disabled={readOnly || undefined}
-          className={readOnly ? "opacity-50 select-none" : undefined}
-        >
-          <div className="px-3 py-3 sm:px-4">
-            <p className="mb-3 text-xs text-muted-foreground">
-              Favorites, visibility, and ordering are saved on this device. Custom models are saved
-              on the selected environment.
-            </p>
-            <ProviderModelsSection
-              instanceId={instanceId}
-              driverKind={driverKind}
-              models={modelsForDisplay}
-              customModels={customModels}
-              hiddenModels={hiddenModels}
-              favoriteModels={favoriteModels}
-              modelOrder={modelOrder}
-              onChange={updateCustomModels}
-              onHiddenModelsChange={onHiddenModelsChange}
-              onFavoriteModelsChange={onFavoriteModelsChange}
-              onModelOrderChange={onModelOrderChange}
-            />
-          </div>
-        </SettingsSection>
-      ) : null}
-
-      <SettingsSection
-        title="Provider"
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
-        className={readOnly ? "opacity-50 select-none" : undefined}
-      >
-        <ProviderConnectionRow
-          instance={instance}
-          connections={connections ?? {}}
-          displayName={displayName}
-          onSelect={updateConnectionId}
-        />
-        {showCodexShadowHomeHint ? (
-          <p className="px-3 pb-3 text-[13px] leading-[1.45] text-warning sm:px-4">
-            Codex routing needs a shadow home — set Shadow home path under Runtime, otherwise Codex
-            keeps talking to its native endpoint.
-          </p>
-        ) : null}
       </SettingsSection>
     </>
   );

@@ -81,6 +81,22 @@ describe("mergeOpenCodeBackendConfigContent", () => {
     expect(Object.keys(entry.models)).toEqual(["glm-4.6", "kimi-k2"]);
   });
 
+  it("strips a stale harness bucket prefix from injected model ids", () => {
+    const content = mergeOpenCodeBackendConfigContent({
+      backend: { ...backend, models: ["t3-backend/probe-go", "glm-4.6"] },
+      existingContent: undefined,
+      apiKey: "secret",
+    });
+    const parsed = JSON.parse(content ?? "{}") as {
+      provider: Record<string, { models: Record<string, unknown> }>;
+    };
+    const entry = parsed.provider["t3-backend"];
+    if (entry === undefined) {
+      return expect.fail("Expected the t3-backend provider entry");
+    }
+    expect(Object.keys(entry.models)).toEqual(["probe-go", "glm-4.6"]);
+  });
+
   it("preserves the user's existing providers and merges over the reserved id only", () => {
     const content = mergeOpenCodeBackendConfigContent({
       backend,

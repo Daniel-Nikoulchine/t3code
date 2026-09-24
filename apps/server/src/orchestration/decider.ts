@@ -9,16 +9,12 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
-  type OrchestrationThread,
-  type ThreadPullRequestKey,
-  type ThreadPullRequestLink,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import {
   legacyLinkedPullRequestOf,
   legacyThreadPullRequestKey,
   normalizeThreadPullRequestKey,
-  threadPullRequestKeysEqual,
 } from "@t3tools/shared/threadPullRequests";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 import * as DateTime from "effect/DateTime";
@@ -45,7 +41,6 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
-import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
 
 const isScriptRunCommand = Schema.is(SCRIPT_RUN_COMMAND_PATTERN);
 
@@ -53,118 +48,12 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const decodeUserInputRequestedPayload = Schema.decodeUnknownOption(UserInputRequestedPayload);
 const threadPullRequestLinksEqual = Schema.toEquivalence(Schema.NullOr(ThreadLinkedPullRequest));
 
-/**
- * Blocked-on-you work derived from the thread's retained activities: an
- * approval or user-input request with no later resolution for the same
- * requestId. The server-side twin of the shell's hasPendingApprovals /
- * hasPendingUserInput flags, which the decider read model does not carry.
- * The clearing rules MUST match ProjectionPipeline's pending accounting —
- * resolved activities always clear, respond.failed clears only when the
- * failure detail marks the request stale/unknown — or settle would be
- * rejected on threads whose shell flags read as clear.
- */
-function isStaleRequestFailureDetail(payload: Record<string, unknown> | null): boolean {
-  const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
-  if (detail === null) return false;
-  return (
-    detail.includes("stale pending approval request") ||
-    detail.includes("unknown pending approval request") ||
-    detail.includes("unknown pending permission request") ||
-    detail.includes("stale pending user-input request") ||
-    detail.includes("unknown pending user-input request") ||
-    detail.includes("unknown pending user input request") ||
-    detail.includes("unknown pending codex user input request")
-  );
-}
-
-// Scans the read model's activities, which the projector caps at the most
-// recent 500 plus pending async questions. Async questions remain actionable
-// while the agent works, so they must not expire with the activity window.
-function openRequests(thread: Pick<OrchestrationThread, "activities">) {
-  const requests = new Map<string, OrchestrationThreadActivity>();
-  for (const activity of thread.activities) {
-    const payload =
-      typeof activity.payload === "object" && activity.payload !== null
-        ? (activity.payload as Record<string, unknown>)
-        : null;
-    const requestId = typeof payload?.requestId === "string" ? payload.requestId : null;
-    if (requestId === null) continue;
-    if (activity.kind === "approval.requested" || activity.kind === "user-input.requested") {
-      requests.set(requestId, activity);
-    } else if (activity.kind === "approval.resolved" || activity.kind === "user-input.resolved") {
-      requests.delete(requestId);
-    } else if (
-      (activity.kind === "provider.approval.respond.failed" ||
-        activity.kind === "provider.user-input.respond.failed") &&
-      isStaleRequestFailureDetail(payload)
-    ) {
-      requests.delete(requestId);
-    }
-  }
-  return requests;
-}
-
-/** Apply the shared shell-level rule to the detailed command read model. */
-function hasQueuedTurnStartForThread(
-  thread: Pick<OrchestrationThread, "messages" | "latestTurn" | "session">,
-  now: string,
-): boolean {
-  let latestUserMessageAt: string | null = null;
-  let latestUserMessageAtMs = Number.NEGATIVE_INFINITY;
-  for (const message of thread.messages) {
-    if (message.role !== "user" || isImportedAgentSessionMessageId(message.id)) continue;
-    const messageAtMs = Date.parse(message.createdAt);
-    latestUserMessageAtMs = Math.max(latestUserMessageAtMs, messageAtMs);
-    if (messageAtMs === latestUserMessageAtMs) {
-      latestUserMessageAt = message.createdAt;
-    }
-  }
-  return threadHasQueuedTurnStart(
-    {
-      latestUserMessageAt: Number.isFinite(latestUserMessageAtMs) ? latestUserMessageAt : null,
-      latestTurn: thread.latestTurn,
-      session: thread.session,
-    },
-    now,
-  );
-}
-
-function findPullRequestLink(
-  thread: Pick<OrchestrationThread, "pullRequests">,
-  key: ThreadPullRequestKey,
-): ThreadPullRequestLink | undefined {
-  return thread.pullRequests.find((link) => threadPullRequestKeysEqual(link, key));
-}
-
-function withEventBase(
-  input: Pick<OrchestrationCommand, "commandId"> & {
-    readonly aggregateKind: OrchestrationEvent["aggregateKind"];
-    readonly aggregateId: OrchestrationEvent["aggregateId"];
-    readonly occurredAt: string;
-    readonly metadata?: OrchestrationEvent["metadata"];
-  },
-): Effect.Effect<
-  Omit<OrchestrationEvent, "sequence" | "type" | "payload">,
-  PlatformError.PlatformError,
-  Crypto.Crypto
-> {
-  return Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) =>
-      crypto.randomUUIDv4.pipe(
-        Effect.map((eventId) => ({
-          eventId: EventId.make(eventId),
-          aggregateKind: input.aggregateKind,
-          aggregateId: input.aggregateId,
-          occurredAt: input.occurredAt,
-          commandId: input.commandId,
-          causationEventId: null,
-          correlationId: input.commandId,
-          metadata: input.metadata ?? {},
-        })),
-      ),
-    ),
-  );
-}
+import {
+  findPullRequestLink,
+  hasQueuedTurnStartForThread,
+  openRequests,
+  withEventBase,
+} from "./deciderKernel.ts";
 
 type PlannedOrchestrationEvent = Omit<OrchestrationEvent, "sequence">;
 
@@ -391,7 +280,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           ...(command.combo !== undefined ? { combo: command.combo } : {}),
           runtimeMode: command.runtimeMode,
-          interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
@@ -1334,29 +1222,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.interaction-mode.set": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.interaction-mode-set",
-        payload: {
-          threadId: command.threadId,
-          interactionMode: command.interactionMode,
-          updatedAt: occurredAt,
-        },
-      };
-    }
-
     case "thread.turn.start": {
       if (isImportedAgentSessionMessageId(command.message.messageId)) {
         return yield* new OrchestrationCommandInvariantError({
@@ -1369,30 +1234,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      const sourceProposedPlan = command.sourceProposedPlan;
-      const sourceThread = sourceProposedPlan
-        ? yield* requireThread({
-            readModel,
-            command,
-            threadId: sourceProposedPlan.threadId,
-          })
-        : null;
-      const sourcePlan =
-        sourceProposedPlan && sourceThread
-          ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
-          : null;
-      if (sourceProposedPlan && !sourcePlan) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Proposed plan '${sourceProposedPlan.planId}' does not exist on thread '${sourceProposedPlan.threadId}'.`,
-        });
-      }
-      if (sourceThread && sourceThread.projectId !== targetThread.projectId) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
-        });
-      }
       // A worktree bootstrap persists the message ahead of the turn with
       // `thread.message.user.append`; the turn then only references it.
       const persistedUserMessage = targetThread.messages.find(
@@ -1443,8 +1284,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
           runtimeMode: targetThread.runtimeMode,
-          interactionMode: targetThread.interactionMode,
-          ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           createdAt: command.createdAt,
         },
       };
@@ -1684,7 +1523,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               threadId: command.threadId,
               createdAt: command.createdAt,
               runtimeMode: thread.runtimeMode,
-              interactionMode: thread.interactionMode,
               message: {
                 messageId: MessageId.make(`async-answer:${command.requestId}`),
                 role: "user",
@@ -2041,27 +1879,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       });
       return events;
-    }
-
-    case "thread.proposed-plan.upsert": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.proposed-plan-upserted",
-        payload: {
-          threadId: command.threadId,
-          proposedPlan: command.proposedPlan,
-        },
-      };
     }
 
     case "thread.turn.diff.complete": {

@@ -7,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { beforeEach } from "vite-plus/test";
+import { beforeEach, describe, expect, it as viteIt } from "vite-plus/test";
 
 import { OpenCodeSettings } from "@t3tools/contracts";
 import { ServerConfig } from "../../config.ts";
@@ -18,7 +18,7 @@ import {
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
-import { checkOpenCodeProviderStatus } from "./OpenCodeProvider.ts";
+import { checkOpenCodeProviderStatus, flattenOpenCodeModels } from "./OpenCodeProvider.ts";
 import type { OpenCodeInventory } from "../opencodeRuntime.ts";
 const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
 
@@ -286,10 +286,48 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
         variantDescriptor.options.find((option) => option.isDefault === true)?.id,
         "medium",
       );
+      // `plan` is dropped and `build` alone is not a choice: the selector
+      // would only restate the default, so no agent descriptor is emitted.
+      const agentDescriptor = model.capabilities?.optionDescriptors?.find(
+        (descriptor) => descriptor.id === "agent" && descriptor.type === "select",
+      );
+      NodeAssert.equal(agentDescriptor, undefined);
+    }),
+  );
+
+  it.effect("hides OpenCode's plan agent and keeps the selector for custom primary agents", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.inventory = {
+        providerList: {
+          connected: ["openai"],
+          all: [
+            {
+              id: "openai",
+              name: "OpenAI",
+              models: { "gpt-5.4": { id: "gpt-5.4", name: "GPT-5.4", variants: { medium: {} } } },
+            },
+          ],
+          default: {},
+        },
+        agents: [
+          { name: "build", hidden: false, mode: "primary" },
+          { name: "plan", hidden: false, mode: "primary" },
+          { name: "docs", hidden: false, mode: "primary" },
+        ],
+      };
+
+      const snapshot = yield* checkProvider(makeOpenCodeSettings());
+      const model = snapshot.models.find((entry) => entry.slug === "openai/gpt-5.4");
+
+      NodeAssert.ok(model);
       const agentDescriptor = model.capabilities?.optionDescriptors?.find(
         (descriptor) => descriptor.id === "agent" && descriptor.type === "select",
       );
       NodeAssert.ok(agentDescriptor && agentDescriptor.type === "select");
+      NodeAssert.deepEqual(
+        agentDescriptor.options.map((option) => option.id),
+        ["build", "docs"],
+      );
       NodeAssert.equal(
         agentDescriptor.options.find((option) => option.isDefault === true)?.id,
         "build",
@@ -498,4 +536,50 @@ it.layer(testLayer)("checkOpenCodeProviderStatus with configured server URL", (i
       );
     }),
   );
+});
+
+describe("flattenOpenCodeModels backend bucket", () => {
+  const inventory = (
+    providers: ReadonlyArray<{ id: string; name: string; models: Record<string, string> }>,
+  ): OpenCodeInventory =>
+    ({
+      providerList: {
+        connected: providers.map((provider) => provider.id),
+        all: providers.map((provider) => ({
+          id: provider.id,
+          name: provider.name,
+          models: Object.fromEntries(
+            Object.entries(provider.models).map(([id, name]) => [id, { id, name }]),
+          ),
+        })),
+        default: {},
+      },
+      agents: [],
+      skills: [],
+    }) as unknown as OpenCodeInventory;
+
+  viteIt("surfaces the upstream — never the harness bucket — for injected backend models", () => {
+    const models = flattenOpenCodeModels(
+      inventory([
+        {
+          id: "t3-backend",
+          name: "T3 Backend",
+          models: { "opencode-go/kimi-k3": "kimi-k3", "probe-go": "probe-go" },
+        },
+      ]),
+    );
+    expect(models.map((model) => [model.slug, model.subProvider ?? null])).toEqual([
+      ["t3-backend/opencode-go/kimi-k3", "opencode-go"],
+      ["t3-backend/probe-go", null],
+    ]);
+  });
+
+  viteIt("keeps native provider labels untouched", () => {
+    const models = flattenOpenCodeModels(
+      inventory([{ id: "anthropic", name: "Anthropic", models: { "claude-opus": "Claude Opus" } }]),
+    );
+    expect(models.map((model) => [model.slug, model.subProvider ?? null])).toEqual([
+      ["anthropic/claude-opus", "Anthropic"],
+    ]);
+  });
 });

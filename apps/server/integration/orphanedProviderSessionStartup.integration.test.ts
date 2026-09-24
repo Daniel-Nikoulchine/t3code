@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   EnvironmentId,
   MessageId,
   ProjectId,
@@ -157,7 +156,6 @@ it.effect(
           projectId,
           title: "Startup orphan thread",
           modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -173,7 +171,6 @@ it.effect(
             text: "Persist this queued turn before restart",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           createdAt,
         });
@@ -209,7 +206,6 @@ it.effect(
           projectId,
           title: "Startup orphan with stopped binding",
           modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -225,7 +221,6 @@ it.effect(
             text: "Persist another queued turn before restart",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           createdAt,
         });
@@ -309,7 +304,6 @@ it.effect(
               text: "Continue immediately after restart",
               attachments: [],
             },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             runtimeMode: "full-access",
             createdAt,
           }),
@@ -394,7 +388,6 @@ it.effect.each(["opt-in desktop restart", "marked remote update"] as const)(
           projectId,
           title: "Newer running turn",
           modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -469,7 +462,6 @@ it.effect.each(["opt-in desktop restart", "marked remote update"] as const)(
         assert.deepStrictEqual(yield* Deferred.await(sent), {
           threadId,
           continuation: true,
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         });
       }).pipe(
         Effect.provide(

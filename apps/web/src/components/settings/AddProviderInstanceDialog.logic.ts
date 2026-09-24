@@ -1,3 +1,16 @@
+import { ProviderDriverKind, type ServerSettings } from "@t3tools/contracts";
+
+/** Include legacy default slots and disabled instances when preventing duplicates. */
+export function getExistingHarnessDrivers(settings: {
+  readonly providers?: Partial<ServerSettings["providers"]>;
+  readonly providerInstances?: ServerSettings["providerInstances"];
+}): ReadonlySet<ProviderDriverKind> {
+  return new Set([
+    ...Object.keys(settings.providers ?? {}).map((driver) => ProviderDriverKind.make(driver)),
+    ...Object.values(settings.providerInstances ?? {}).map((instance) => instance.driver),
+  ]);
+}
+
 export type WizardNavigation =
   | { readonly kind: "navigate"; readonly step: number }
   | { readonly kind: "blocked"; readonly step: number; readonly error: string };
@@ -18,11 +31,15 @@ export function resolveWizardNavigation(
   currentStep: number,
   requestedStep: number,
   stepCount: number,
-  validation: { readonly instanceIdError: string | null },
+  validation: { readonly instanceIdError: string | null; readonly driverError?: string | null },
 ): WizardNavigation {
   const lastStep = Math.max(0, stepCount - 1);
   const targetStep = Math.max(0, Math.min(lastStep, requestedStep));
   const movesForwardPastIdentity = currentStep <= IDENTITY_STEP && targetStep > IDENTITY_STEP;
+
+  if (targetStep > 0 && targetStep >= currentStep && validation.driverError) {
+    return { kind: "blocked", step: 0, error: validation.driverError };
+  }
 
   if (movesForwardPastIdentity && validation.instanceIdError !== null) {
     return {

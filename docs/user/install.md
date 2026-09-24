@@ -106,6 +106,7 @@ from a phone or another computer.
 | Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                            |
 | Pi          | Install [Pi coding agent](https://github.com/badlogic/pi-mono), then run `pi` and sign in with `/login`.                     |
 | ZCode       | Install [ZCode CLI](https://www.npmjs.com/package/zcode-app-cli), then run `zcode login`.                                    |
+| Freebuff    | Install [Freebuff](https://www.npmjs.com/package/freebuff), then run `freebuff login`.                                       |
 
 Provider CLIs must be on the server's `PATH`. If T3 Code cannot find one, set its
 **Binary path** in provider settings, especially when using a version manager.

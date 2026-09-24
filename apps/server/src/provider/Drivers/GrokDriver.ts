@@ -1,8 +1,9 @@
-import { GrokSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { GrokSettings, ProviderDriverKind, type ModelBackendConfig } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as NodeOS from "node:os";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -19,21 +20,22 @@ import {
   enrichGrokSnapshot,
 } from "../Layers/GrokProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import {
+  DEFAULT_BACKEND_PROTOCOLS,
+  isRouterBackend,
+  isUsableBackend,
+} from "../ModelBackendEnvironment.ts";
+import { resolveHarnessProcessEnv } from "../harnessMaterial.ts";
+import { ensureGrokBackendHome, type GrokRoutedModelEntry } from "./GrokHomeLayout.ts";
 import { discoverGrokSkills } from "./GrokSkills.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("grok");
@@ -53,6 +55,56 @@ export type GrokDriverEnv =
   | ServerConfig
   | ServerSettingsService;
 
+/**
+ * Model entries for a backend wired grok instance. Grok resolves each `-m`
+ * id through its own `[model.<name>]` table, so every slug the harness may
+ * be asked for needs an entry pointing at an OpenAI Chat Completions
+ * surface (`base_url` + `/v1/chat/completions`, verified against the
+ * installed binary).
+ *
+ * Router backed instances serve the route keys: the router matches the
+ * request `model` against the key, so the entry carries the key unchanged
+ * and never resolves the upstream itself. Direct OpenAI-compatible backends
+ * serve their static model list. Native instances and Anthropic-only
+ * endpoints yield nothing and grok keeps its default behavior.
+ *
+ * Without a resolved key no `api_key` is set on direct entries and grok
+ * falls back to its own login, per its documented key chain. Router entries
+ * always carry a key: the proxy authenticates upstream itself and ignores
+ * whatever the harness sends, so a placeholder keeps grok from demanding a
+ * login it never needs.
+ */
+export function resolveGrokRoutedModelEntries(input: {
+  readonly backend: ModelBackendConfig | undefined;
+  readonly routeKeys: ReadonlyArray<string>;
+  readonly baseEnv: NodeJS.ProcessEnv;
+}): Array<GrokRoutedModelEntry> {
+  const { backend, routeKeys, baseEnv } = input;
+  if (!isUsableBackend(backend)) return [];
+  if (!(backend.protocols ?? DEFAULT_BACKEND_PROTOCOLS).includes("openai")) return [];
+  if (backend.baseUrl === undefined) return [];
+  const baseUrl = backend.baseUrl.replace(/\/+$/, "");
+  const grokBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+  const apiKey =
+    backend.apiKey ?? (backend.apiKeyEnv !== undefined ? baseEnv[backend.apiKeyEnv] : undefined);
+  if (isRouterBackend(backend)) {
+    const routerKey = apiKey !== undefined && apiKey.length > 0 ? apiKey : "t3-router";
+    return routeKeys.map((slug) => ({
+      slug,
+      model: slug,
+      baseUrl: grokBaseUrl,
+      apiKey: routerKey,
+    }));
+  }
+  const keyPart = apiKey !== undefined && apiKey.length > 0 ? { apiKey } : {};
+  return (backend.models ?? []).map((slug) => ({
+    slug,
+    model: slug,
+    baseUrl: grokBaseUrl,
+    ...keyPart,
+  }));
+}
+
 export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
@@ -61,15 +113,75 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
   },
   configSchema: GrokSettings,
   defaultConfig: (): GrokSettings => decodeGrokSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
-      const { cwd } = yield* ServerConfig;
+      const path = yield* Path.Path;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const { cwd, baseDir } = yield* ServerConfig;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // The backend overlay reaches the harness through a shadow GROK_HOME:
+      // grok resolves each `-m` id via its own `[model.<name>]` table, so
+      // routed slugs need entries the CLI's flags cannot express. Without a
+      // backend the overlay stays empty and direct mode is untouched.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: `Failed to read server settings for Grok backend wiring: ${cause.message ?? String(cause)}`,
+              cause,
+            }),
+        ),
+      );
+      const routeKeys = Object.keys(settings.modelRouterRoutes ?? {});
+      const routedEntries = resolveGrokRoutedModelEntries({
+        backend,
+        routeKeys,
+        baseEnv: process.env,
+      });
+      const processEnv = resolveHarnessProcessEnv({
+        environment,
+        backend,
+        baseEnv: process.env,
+      }).processEnv;
+      if (routedEntries.length > 0) {
+        const realHome =
+          processEnv.GROK_HOME && processEnv.GROK_HOME.length > 0
+            ? processEnv.GROK_HOME
+            : path.join(NodeOS.homedir(), ".grok");
+        const home = yield* ensureGrokBackendHome({
+          realHomePath: realHome,
+          shadowHomePath: path.join(baseDir, "grok-homes", instanceId),
+          entries: routedEntries,
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.mapError(
+            (cause) =>
+              new ProviderDriverError({
+                driver: DRIVER_KIND,
+                instanceId,
+                detail: `Failed to set up the Grok backend home: ${cause.message ?? String(cause)}`,
+                cause,
+              }),
+          ),
+        );
+        processEnv.GROK_HOME = home.shadowHomePath;
+      }
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -80,8 +192,16 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend,
+        nativeFallback,
       });
-      const effectiveConfig = { ...config, enabled } satisfies GrokSettings;
+      const effectiveConfig = {
+        ...config,
+        enabled,
+        ...(routedEntries.length > 0
+          ? { customModels: [...config.customModels, ...routedEntries.map((entry) => entry.slug)] }
+          : {}),
+      } satisfies GrokSettings;
       const adapter = yield* makeGrokAdapter(effectiveConfig, {
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
@@ -95,34 +215,19 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<GrokSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "Grok snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialGrokProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialGrokProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          enrichGrokSnapshot({
-            snapshot: currentSnapshot,
-            maintenanceCapabilities: MAINTENANCE_CAPABILITIES,
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-            publishSnapshot,
-            httpClient,
-          }),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build Grok snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichGrokSnapshot,
+        httpClient,
+      });
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot

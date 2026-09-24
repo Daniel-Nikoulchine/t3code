@@ -88,7 +88,6 @@ function thread(
     title: id,
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: "full-access",
-    interactionMode: "default",
     pullRequests: [],
     branch: "feature",
     worktreePath: null,
@@ -102,7 +101,6 @@ function thread(
     latestUserMessageAt: NOW,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
     ...overrides,
   };
 }

@@ -69,6 +69,14 @@ describe("withClineFreeModels", () => {
     expect(inkling[0]).toMatchObject({ name: "Inkling (free)", isDefault: true });
     expect(models.map((model) => model.slug)).toContain("nex-agi/nex-n2.5-mini:free");
     expect(new Set(models.map((model) => model.slug)).size).toBe(models.length);
+    // Vendor prefixes become the picker subtitle; cline's own routing bucket
+    // never does.
+    expect(models.find((model) => model.slug === "nex-agi/nex-n2.5-mini:free")?.subProvider).toBe(
+      "nex-agi",
+    );
+    expect(
+      models.find((model) => model.slug === "cline-free/muse-spark-1.3-contributor")?.subProvider,
+    ).toBeUndefined();
   });
 });
 
@@ -85,6 +93,18 @@ describe("buildClineDiscoveredModelsFromSessionModelState", () => {
       ["anthropic/claude-sonnet-5", true],
       ["x-ai/grok-4.6", false],
     ]);
+    expect(models.map((model) => [model.slug, model.subProvider ?? null, model.name])).toEqual([
+      ["anthropic/claude-sonnet-5", "anthropic", "Claude Sonnet 5"],
+      ["x-ai/grok-4.6", "x-ai", "Grok 4.6"],
+    ]);
+  });
+
+  it("falls back to the bare model name next to the vendor subtitle", () => {
+    const models = buildClineDiscoveredModelsFromSessionModelState({
+      currentModelId: "",
+      availableModels: [{ modelId: "anthropic/claude-sonnet-5", name: "" }],
+    });
+    expect(models[0]).toMatchObject({ subProvider: "anthropic", name: "claude-sonnet-5" });
   });
 
   it("skips the default alias and dedupes repeated ids", () => {

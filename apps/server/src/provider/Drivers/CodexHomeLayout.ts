@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import * as PlatformError from "effect/PlatformError";
 
 import { expandHomePath } from "../../pathExpansion.ts";
+import { DEFAULT_BACKEND_PROTOCOLS } from "../ModelBackendEnvironment.ts";
 
 export interface CodexHomeLayout {
   readonly mode: "direct" | "authOverlay";
@@ -505,7 +506,7 @@ export function codexBackendWiresProvider(
   return (
     backend !== undefined &&
     backend.kind !== "native" &&
-    (backend.protocols ?? ["openai", "anthropic"]).includes("openai") &&
+    (backend.protocols ?? DEFAULT_BACKEND_PROTOCOLS).includes("openai") &&
     typeof backend.baseUrl === "string" &&
     backend.baseUrl.length > 0
   );
@@ -530,6 +531,7 @@ const isTomlSectionHeader = (line: string): boolean => /^\[.*\]$/.test(line.trim
 function renderBackendProviderSection(input: {
   readonly baseUrl: string;
   readonly envKey?: string | undefined;
+  readonly useOpenaiAuth?: boolean | undefined;
 }): Array<string> {
   const lines = [
     CODEX_BACKEND_SECTION_HEADER,
@@ -538,6 +540,11 @@ function renderBackendProviderSection(input: {
     // speak; Codex's native "responses" wire is not something they serve.
     'wire_api = "chat"',
   ];
+  if (input.useOpenaiAuth === true) {
+    // OAuth account backend: Codex's own sign-in authenticates the proxied
+    // requests, so the section must not carry an `env_key`.
+    lines.push("requires_openai_auth = true");
+  }
   if (input.envKey !== undefined) {
     lines.push(`env_key = ${tomlEscapeString(input.envKey)}`);
   }
@@ -558,6 +565,8 @@ export function mergeCodexBackendConfigToml(
   input: {
     readonly baseUrl: string;
     readonly envKey?: string | undefined;
+    /** Emit `requires_openai_auth = true` (Codex's own OAuth login authenticates). */
+    readonly useOpenaiAuth?: boolean | undefined;
   },
 ): string {
   const lines = (userToml ?? "").split(/\r?\n/);
@@ -672,10 +681,15 @@ export const writeCodexBackendShadowConfig = Effect.fn("writeCodexBackendShadowC
   const merged = mergeCodexBackendConfigToml(baseToml, {
     baseUrl: backend.baseUrl,
     // The overlay carries OPENAI_API_KEY only when a key actually resolved.
+    // An OAuth account backend ignores it entirely: Codex's own sign-in
+    // authenticates, and `requires_openai_auth` makes Codex ignore `env_key`.
     envKey:
-      backendEnv.OPENAI_API_KEY !== undefined && backendEnv.OPENAI_API_KEY.length > 0
+      backend.codexAccountInstanceId === undefined &&
+      backendEnv.OPENAI_API_KEY !== undefined &&
+      backendEnv.OPENAI_API_KEY.length > 0
         ? "OPENAI_API_KEY"
         : undefined,
+    ...(backend.codexAccountInstanceId !== undefined ? { useOpenaiAuth: true } : {}),
   });
 
   yield* fileSystem.writeFileString(shadowConfigPath, CODEX_BACKEND_CONFIG_MARKER + merged).pipe(

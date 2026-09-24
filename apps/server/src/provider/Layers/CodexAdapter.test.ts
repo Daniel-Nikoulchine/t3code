@@ -55,6 +55,8 @@ class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+
+const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
@@ -2990,6 +2992,115 @@ usageLimitLayer("CodexAdapterLive usage limits", (it) => {
       if (first._tag !== "Some" || first.value.type !== "runtime.error") return;
       NodeAssert.equal(first.value.payload.message, "Codex is temporarily unavailable.");
       NodeAssert.equal(first.value.payload.class, "provider_error");
+    }),
+  );
+});
+
+const hybridRuntimeFactory = makeRuntimeFactory();
+const hybridLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({ homePath: "/shadow-home" });
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: hybridRuntimeFactory.factory,
+        environment: {
+          OPENAI_BASE_URL: "https://proxy.test/v1",
+          OPENAI_API_KEY: "test-key",
+        },
+        hybridBackend: {
+          nativeHomePath: "/native-home",
+          nativeEnvironment: {},
+          isConnectionModel: (model) => model === "glm-5",
+        },
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+hybridLayer("CodexAdapterLive hybrid backend", (it) => {
+  it.effect("starts connection models in the wired home and native models in the shared home", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("hybrid-connection"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "glm-5"),
+        runtimeMode: "full-access",
+      });
+      const wiredRuntime = hybridRuntimeFactory.lastRuntime;
+      NodeAssert.ok(wiredRuntime);
+      NodeAssert.equal(wiredRuntime.options.homePath, "/shadow-home");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("hybrid-native"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5"),
+        runtimeMode: "full-access",
+      });
+      const nativeRuntime = hybridRuntimeFactory.lastRuntime;
+      NodeAssert.ok(nativeRuntime);
+      NodeAssert.equal(nativeRuntime.options.homePath, "/native-home");
+      // The native side must not leak the backend overlay: no endpoint URL
+      // reaches its environment.
+      NodeAssert.equal(
+        (nativeRuntime.options.environment as Record<string, string> | undefined)?.[
+          "OPENAI_BASE_URL"
+        ],
+        undefined,
+      );
+    }),
+  );
+
+  it.effect("rejects a turn that crosses the session backend boundary", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("hybrid-crossed"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5"),
+        runtimeMode: "full-access",
+      });
+      const failure = yield* adapter
+        .sendTurn({
+          threadId: asThreadId("hybrid-crossed"),
+          input: "hello",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "glm-5"),
+        })
+        .pipe(Effect.flip);
+      if (!isProviderAdapterValidationError(failure)) {
+        NodeAssert.fail("expected a validation error");
+      }
+      NodeAssert.match(failure.issue, /new thread/);
+      NodeAssert.equal(hybridRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("lets turns through on the session backend side", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("hybrid-same-side"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5"),
+        runtimeMode: "full-access",
+      });
+      const runtime = hybridRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      runtime.sendTurnImpl.mockClear();
+      yield* Effect.ignore(
+        adapter.sendTurn({
+          threadId: asThreadId("hybrid-same-side"),
+          input: "hello",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.2"),
+        }),
+      );
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
     }),
   );
 });

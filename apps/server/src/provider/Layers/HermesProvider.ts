@@ -1,7 +1,6 @@
 import {
   type HermesSettings,
   type ModelCapabilities,
-  type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -15,7 +14,6 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -29,10 +27,7 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "../providerMaintenance.ts";
+import { makeEnrichSnapshot } from "../providerMaintenance.ts";
 import {
   deleteHermesSession,
   makeHermesAcpRuntime,
@@ -42,7 +37,6 @@ import {
 const HERMES_PRESENTATION = {
   displayName: "Hermes",
   badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
   requiresNewThreadForModelChange: false,
 } as const;
 // The Reasoning picker needs a Hermes that honors `session/set_config_option`
@@ -538,25 +532,4 @@ export const checkHermesProviderStatus = Effect.fn("checkHermesProviderStatus")(
   });
 });
 
-export const enrichHermesSnapshot = (input: {
-  readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
-  readonly enableProviderUpdateChecks?: boolean;
-  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
-  readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
-  const { snapshot, publishSnapshot } = input;
-
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
-    enableProviderUpdateChecks: input.enableProviderUpdateChecks,
-  }).pipe(
-    Effect.provideService(HttpClient.HttpClient, input.httpClient),
-    Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Hermes version advisory enrichment failed", {
-        errorTag: causeErrorTag(cause),
-      }),
-    ),
-    Effect.asVoid,
-  );
-};
+export const enrichHermesSnapshot = makeEnrichSnapshot("Hermes");

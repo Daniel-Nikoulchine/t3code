@@ -3686,7 +3686,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
         threadId,
         input: "measure this turn",
         attachments: [],
-        interactionMode: "plan",
         modelSelection: createModelSelection(codexInstanceId, "gpt-5.6-sol", [
           { id: "reasoningEffort", value: "high" },
         ]),
@@ -3732,7 +3731,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
         provider: CODEX_DRIVER,
         model: "gpt-5.6-sol",
         effort: "high",
-        interactionMode: "plan",
         runtimeMode: "full-access",
         mixedModels: false,
         durationMs: 40,
@@ -3886,7 +3884,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
           threadId,
           input: "first",
           attachments: [],
-          interactionMode: "default",
           modelSelection: createModelSelection(codexInstanceId, "requested-first"),
         })
         .pipe(Effect.forkChild);
@@ -3896,7 +3893,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
           threadId,
           input: "second",
           attachments: [],
-          interactionMode: "plan",
           modelSelection: createModelSelection(codexInstanceId, "requested-second"),
         })
         .pipe(Effect.forkChild);
@@ -3951,12 +3947,10 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
       assert.deepInclude(completed[0]?.properties ?? {}, {
         model: "native-second",
         effort: "native-effort-second",
-        interactionMode: "plan",
       });
       assert.deepInclude(completed[1]?.properties ?? {}, {
         model: "native-first",
         effort: "native-effort-first",
-        interactionMode: "default",
       });
     }),
   );
@@ -4011,7 +4005,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
           threadId,
           input: "finish immediately",
           attachments: [],
-          interactionMode: "plan",
           modelSelection: createModelSelection(codexInstanceId, "requested-fast"),
         })
         .pipe(Effect.forkChild);
@@ -4027,7 +4020,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
       assert.deepInclude(completed[0]?.properties ?? {}, {
         model: "native-fast",
         effort: "high",
-        interactionMode: "plan",
       });
     }),
   );
@@ -4086,7 +4078,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
         threadId,
         input: "start the real turn",
         attachments: [],
-        interactionMode: "plan",
         modelSelection: createModelSelection(codexInstanceId, "requested-real"),
       });
       const realCompletion = yield* provider.streamEvents.pipe(
@@ -4108,11 +4099,9 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
 
       const completed = recordedTurnAnalytics.eventsByName("provider.turn.completed");
       assert.equal(completed.length, 2);
-      assert.equal(completed[0]?.properties?.interactionMode, undefined);
       assert.equal(completed[0]?.properties?.model, undefined);
       assert.deepInclude(completed[1]?.properties ?? {}, {
         model: "native-real",
-        interactionMode: "plan",
       });
     }),
   );
@@ -4159,7 +4148,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
           threadId,
           input: "first fast completion",
           attachments: [],
-          interactionMode: "default",
           modelSelection: createModelSelection(codexInstanceId, "requested-first"),
         })
         .pipe(Effect.forkChild);
@@ -4170,7 +4158,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
           threadId,
           input: "second fast completion",
           attachments: [],
-          interactionMode: "plan",
           modelSelection: createModelSelection(codexInstanceId, "requested-second"),
         })
         .pipe(Effect.forkChild);
@@ -4211,7 +4198,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
       assert.deepInclude(completed[0]?.properties ?? {}, {
         model: "native-second",
         effort: "native-effort-second",
-        interactionMode: "plan",
         durationMs: 20,
       });
 
@@ -4222,7 +4208,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
       assert.deepInclude(completed[1]?.properties ?? {}, {
         model: "native-first",
         effort: "native-effort-first",
-        interactionMode: "default",
         durationMs: 30,
       });
     }),
@@ -4281,7 +4266,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
           threadId,
           input: "cancel this request",
           attachments: [],
-          interactionMode: "default",
         })
         .pipe(Effect.forkChild);
       yield* Deferred.await(canceledStarted);
@@ -4298,7 +4282,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
           threadId,
           input: "measure the next request",
           attachments: [],
-          interactionMode: "plan",
         })
         .pipe(Effect.forkChild);
       const terminal = yield* Fiber.join(terminalReceipt);
@@ -4316,7 +4299,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
       assert.deepInclude(completed[0]?.properties ?? {}, {
         model: "native-next",
         effort: "high",
-        interactionMode: "plan",
       });
     }),
   );
@@ -4364,7 +4346,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
               threadId,
               input: `bounded deferred ${index + 1}`,
               attachments: [],
-              interactionMode: index % 2 === 0 ? "default" : "plan",
             })
             .pipe(Effect.forkChild),
         );
@@ -4491,7 +4472,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
         threadId,
         input: "start",
         attachments: [],
-        interactionMode: "default",
         modelSelection: createModelSelection(codexInstanceId, "gpt-5.6-sol", [
           { id: "reasoningEffort", value: "high" },
         ]),
@@ -4523,7 +4503,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
         threadId,
         input: "steer",
         attachments: [],
-        interactionMode: "plan",
         modelSelection: createModelSelection(codexInstanceId, "gpt-5.6-terra", [
           { id: "reasoningEffort", value: "low" },
         ]),
@@ -4560,7 +4539,6 @@ turnAnalytics.layer("ProviderServiceLive turn analytics", (it) => {
       assert.equal(completed.length, 1);
       assert.equal(completed[0]?.properties?.model, "gpt-5.6-sol");
       assert.equal(completed[0]?.properties?.effort, "high");
-      assert.equal(completed[0]?.properties?.interactionMode, "default");
       assert.equal(completed[0]?.properties?.mixedModels, true);
       assert.equal(completed[0]?.properties?.durationMs, 45);
     }),
@@ -5009,7 +4987,6 @@ describe("agent browser access", () => {
                 latestUserMessageAt: null,
                 hasPendingApprovals: false,
                 hasPendingUserInput: false,
-                hasActionableProposedPlan: false,
               }),
             );
           }).pipe(Effect.orDie),
@@ -5154,7 +5131,7 @@ describe("agent browser access", () => {
         { device: false },
         { withoutOrchestration: true },
       );
-      assert.deepEqual(issued, [{ threadId, capabilities: ["device", "pull-requests"] }]);
+      assert.deepEqual(issued, [{ threadId, capabilities: ["preview", "pull-requests"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

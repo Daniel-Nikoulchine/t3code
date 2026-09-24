@@ -178,7 +178,6 @@ interface ClaudeTurnState {
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
-  readonly capturedProposedPlanKeys: Set<string>;
   latestAssistantUsage: unknown | undefined;
   compactedSinceLatestAssistantUsage: boolean;
   hasSubagents: boolean;
@@ -1708,28 +1707,6 @@ function extractTextContent(value: unknown): string {
   return extractTextContent(record.content);
 }
 
-function extractExitPlanModePlan(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-
-  const record = value as {
-    plan?: unknown;
-  };
-  return typeof record.plan === "string" && record.plan.trim().length > 0
-    ? record.plan.trim()
-    : undefined;
-}
-
-function exitPlanCaptureKey(input: {
-  readonly toolUseId?: string | undefined;
-  readonly planMarkdown: string;
-}): string {
-  return input.toolUseId && input.toolUseId.length > 0
-    ? `tool:${input.toolUseId}`
-    : `plan:${input.planMarkdown}`;
-}
-
 function tryParseJsonRecord(value: string): Record<string, unknown> | undefined {
   const result = decodeUnknownJsonStringExit(value);
   if (!Exit.isSuccess(result)) {
@@ -2393,53 +2370,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             },
           }
         : {}),
-    });
-  });
-
-  const emitProposedPlanCompleted = Effect.fn("emitProposedPlanCompleted")(function* (
-    context: ClaudeSessionContext,
-    input: {
-      readonly planMarkdown: string;
-      readonly toolUseId?: string | undefined;
-      readonly rawSource: "claude.sdk.message" | "claude.sdk.permission";
-      readonly rawMethod: string;
-      readonly rawPayload: unknown;
-    },
-  ) {
-    const turnState = context.turnState;
-    const planMarkdown = input.planMarkdown.trim();
-    if (!turnState || planMarkdown.length === 0) {
-      return;
-    }
-
-    const captureKey = exitPlanCaptureKey({
-      toolUseId: input.toolUseId,
-      planMarkdown,
-    });
-    if (turnState.capturedProposedPlanKeys.has(captureKey)) {
-      return;
-    }
-    turnState.capturedProposedPlanKeys.add(captureKey);
-
-    const stamp = yield* makeEventStamp();
-    yield* offerRuntimeEvent({
-      type: "turn.proposed.completed",
-      eventId: stamp.eventId,
-      provider: PROVIDER,
-      createdAt: stamp.createdAt,
-      threadId: context.session.threadId,
-      turnId: turnState.turnId,
-      payload: {
-        planMarkdown,
-      },
-      providerRefs: nativeProviderRefs(context, {
-        providerItemId: input.toolUseId,
-      }),
-      raw: {
-        source: input.rawSource,
-        method: input.rawMethod,
-        payload: input.rawPayload,
-      },
     });
   });
 
@@ -3200,7 +3130,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         items: [],
         assistantTextBlocks: new Map(),
         assistantTextBlockOrder: [],
-        capturedProposedPlanKeys: new Set(),
         latestAssistantUsage: undefined,
         compactedSinceLatestAssistantUsage: false,
         hasSubagents: false,
@@ -3235,35 +3164,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           payload: {},
         },
       });
-    }
-
-    const content = message.message?.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (!block || typeof block !== "object") {
-          continue;
-        }
-        const toolUse = block as {
-          type?: unknown;
-          id?: unknown;
-          name?: unknown;
-          input?: unknown;
-        };
-        if (toolUse.type !== "tool_use" || toolUse.name !== "ExitPlanMode") {
-          continue;
-        }
-        const planMarkdown = extractExitPlanModePlan(toolUse.input);
-        if (!planMarkdown) {
-          continue;
-        }
-        yield* emitProposedPlanCompleted(context, {
-          planMarkdown,
-          toolUseId: typeof toolUse.id === "string" ? toolUse.id : undefined,
-          rawSource: "claude.sdk.message",
-          rawMethod: "claude/assistant",
-          rawPayload: message,
-        });
-      }
     }
 
     if (context.turnState) {
@@ -4490,32 +4390,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         }
 
         // Handle AskUserQuestion: surface clarifying questions to the
-        // user via the user-input runtime event channel, regardless of
-        // runtime mode (plan mode relies on this heavily).
+        // user via the user-input runtime event channel.
         if (toolName === "AskUserQuestion") {
           return yield* handleAskUserQuestion(context, toolInput, callbackOptions);
-        }
-
-        if (toolName === "ExitPlanMode") {
-          const planMarkdown = extractExitPlanModePlan(toolInput);
-          if (planMarkdown) {
-            yield* emitProposedPlanCompleted(context, {
-              planMarkdown,
-              toolUseId: callbackOptions.toolUseID,
-              rawSource: "claude.sdk.permission",
-              rawMethod: "canUseTool/ExitPlanMode",
-              rawPayload: {
-                toolName,
-                input: toolInput,
-              },
-            });
-          }
-
-          return {
-            behavior: "deny",
-            message:
-              "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn.",
-          } satisfies PermissionResult;
         }
 
         const runtimeMode = input.runtimeMode ?? "full-access";
@@ -4983,22 +4860,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         undefined;
     }
 
-    // Apply interaction mode by switching the SDK's permission mode.
-    // "plan" maps directly to the SDK's "plan" permission mode;
-    // "default" restores the session's original permission mode.
-    // When interactionMode is absent we leave the current mode unchanged.
-    if (input.interactionMode === "plan") {
-      yield* Effect.tryPromise({
-        try: () => context.query.setPermissionMode("plan"),
-        catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
-      });
-    } else if (input.interactionMode === "default") {
-      yield* Effect.tryPromise({
-        try: () => context.query.setPermissionMode(context.basePermissionMode ?? "default"),
-        catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
-      });
-    }
-
     const turnId = steeringTurnState?.turnId ?? TurnId.make(yield* randomUUIDv4);
     if (steeringTurnState === null) {
       const turnState: ClaudeTurnState = {
@@ -5007,7 +4868,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         items: [],
         assistantTextBlocks: new Map(),
         assistantTextBlockOrder: [],
-        capturedProposedPlanKeys: new Set(),
         latestAssistantUsage: undefined,
         compactedSinceLatestAssistantUsage: false,
         hasSubagents: false,

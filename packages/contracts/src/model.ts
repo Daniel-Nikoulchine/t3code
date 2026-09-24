@@ -154,13 +154,17 @@ const DEVIN_DRIVER_KIND = ProviderDriverKind.make("devin");
 const HERMES_DRIVER_KIND = ProviderDriverKind.make("hermes");
 const CLINE_DRIVER_KIND = ProviderDriverKind.make("cline");
 const KILO_DRIVER_KIND = ProviderDriverKind.make("kilo");
+const MINIMAX_DRIVER_KIND = ProviderDriverKind.make("minimax");
 const OMP_DRIVER_KIND = ProviderDriverKind.make("omp");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 const OPENCLAW_DRIVER_KIND = ProviderDriverKind.make("openclaw");
 const PI_DRIVER_KIND = ProviderDriverKind.make("pi");
 const ZCODE_DRIVER_KIND = ProviderDriverKind.make("zcode");
+const FREEBUFF_DRIVER_KIND = ProviderDriverKind.make("freebuff");
 
 export const DEFAULT_MODEL = "gpt-6-astra";
+/** Freebuff free-mode default; mirrors `DEFAULT_FREEBUFF_MODEL_ID`. */
+export const FREEBUFF_DEFAULT_MODEL = "z-ai/glm-5.3-flash";
 
 /**
  * Codex default-model preference, most preferred first. The provider snapshot
@@ -191,6 +195,8 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   [CLINE_DRIVER_KIND]: "default",
   // Product slug, not an ACP model id. The Kilo adapter treats it as "the session's current model".
   [KILO_DRIVER_KIND]: "auto",
+  // Product slug, not an ACP model id. The Minimax adapter treats it as "the session's current model".
+  [MINIMAX_DRIVER_KIND]: "default",
   [OMP_DRIVER_KIND]: "default",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
   [OPENCLAW_DRIVER_KIND]: "default",
@@ -198,6 +204,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, strin
   // ZCode model id as advertised by `workspace/readState` modelCatalog
   // (`providerId/modelId` collapses to the bare model id on the wire).
   [ZCODE_DRIVER_KIND]: "glm-5.2",
+  [FREEBUFF_DRIVER_KIND]: FREEBUFF_DEFAULT_MODEL,
   [ProviderDriverKind.make("antigravity")]: ANTIGRAVITY_DEFAULT_MODEL,
 };
 
@@ -216,11 +223,13 @@ export const DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   [HERMES_DRIVER_KIND]: "default",
   [CLINE_DRIVER_KIND]: "default",
   [KILO_DRIVER_KIND]: "auto",
+  [MINIMAX_DRIVER_KIND]: "default",
   [OMP_DRIVER_KIND]: "default",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
   [OPENCLAW_DRIVER_KIND]: "default",
   [PI_DRIVER_KIND]: "default",
   [ZCODE_DRIVER_KIND]: "glm-5-turbo",
+  [FREEBUFF_DRIVER_KIND]: FREEBUFF_DEFAULT_MODEL,
 };
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
@@ -264,9 +273,11 @@ export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>>
   [HERMES_DRIVER_KIND]: "Hermes",
   [CLINE_DRIVER_KIND]: "Cline",
   [KILO_DRIVER_KIND]: "Kilo",
+  [MINIMAX_DRIVER_KIND]: "MiniMax",
   [OMP_DRIVER_KIND]: "Oh My Pi",
   [OPENCODE_DRIVER_KIND]: "OpenCode",
   [OPENCLAW_DRIVER_KIND]: "OpenClaw",
   [PI_DRIVER_KIND]: "Pi",
   [ZCODE_DRIVER_KIND]: "ZCode",
+  [FREEBUFF_DRIVER_KIND]: "Freebuff",
 };

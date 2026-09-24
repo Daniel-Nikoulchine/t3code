@@ -40,14 +40,12 @@ import {
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
+import { resolveHarnessProcessEnv } from "../harnessMaterial.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
+  resolveDriverMaintenance,
   makeManualOnlyProviderMaintenanceCapabilities,
   makeProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -98,7 +96,16 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
   },
   configSchema: CursorSettings,
   defaultConfig: (): CursorSettings => decodeCursorSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -107,10 +114,11 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = {
-        ...mergeProviderInstanceEnvironment(environment),
-        ...resolveModelBackendEnvironment(backend, process.env),
-      };
+      const processEnv = resolveHarnessProcessEnv({
+        environment,
+        backend,
+        baseEnv: process.env,
+      }).processEnv;
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -121,19 +129,15 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
-        ...(backend === undefined ? {} : { backend }),
+        backend,
+        nativeFallback,
       });
       const effectiveConfig = { ...config, enabled } satisfies CursorSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makeCursorAdapter(effectiveConfig, {
         environment: processEnv,

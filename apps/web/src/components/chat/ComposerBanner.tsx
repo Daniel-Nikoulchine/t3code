@@ -52,8 +52,8 @@ function Surface({
         "relative isolate border-0 bg-transparent shadow-none [--chat-composer-attached-tint:transparent]",
         variantColors[variant],
         placement === "attached"
-          ? "[--chat-composer-attachment-overlap:calc(1rem+1px)] before:rounded-t-[16px]"
-          : "[--chat-composer-attachment-overlap:0px] before:rounded-[1rem]",
+          ? "[--chat-composer-attachment-overlap:calc(1rem+1px)] before:rounded-t-[12px]"
+          : "[--chat-composer-attachment-overlap:0px] before:rounded-[12px]",
         "before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:border before:border-(--chat-composer-attached-outline)",
         "before:bg-[color-mix(in_srgb,var(--chat-composer-attached-surface)_var(--glass-opacity),transparent)] before:bg-[linear-gradient(var(--chat-composer-attached-tint),var(--chat-composer-attached-tint))] before:backdrop-blur-(--glass-blur) before:backdrop-saturate-(--glass-saturation)",
         // The mask cut-off bleeds one pixel past the seam: Chromium drops the last

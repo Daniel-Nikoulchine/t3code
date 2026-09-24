@@ -23,14 +23,15 @@ import {
   MINIMUM_OPENCODE_VERSION,
   OpenCodeRuntime,
   openCodeRuntimeErrorDetail,
+  UNSUPPORTED_OPENCODE_AGENTS,
   type OpenCodeInventory,
 } from "../opencodeRuntime.ts";
+import { isBackendBucketProviderId } from "../ModelBackendEnvironment.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
-  showInteractionModeToggle: false,
 } as const;
 const OPENCODE_VERSION_PROBE_TIMEOUT = "4 seconds";
 
@@ -185,16 +186,6 @@ const DEFAULT_OPENCODE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabi
       ],
       currentValue: "medium",
     },
-    {
-      id: "agent",
-      label: "Agent",
-      type: "select",
-      options: [
-        { id: "build", label: "Build", isDefault: true },
-        { id: "plan", label: "Plan" },
-      ],
-      currentValue: "build",
-    },
   ],
 });
 
@@ -218,7 +209,10 @@ function openCodeCapabilitiesForModel(input: {
       : { id: value, label: titleCaseSlug(value) },
   );
   const primaryAgents = input.agents.filter(
-    (agent) => !agent.hidden && (agent.mode === "primary" || agent.mode === "all"),
+    (agent) =>
+      !agent.hidden &&
+      !UNSUPPORTED_OPENCODE_AGENTS.has(agent.name) &&
+      (agent.mode === "primary" || agent.mode === "all"),
   );
   const defaultAgent = inferDefaultAgent(primaryAgents);
   const agentOptions = primaryAgents.map((agent) =>
@@ -239,7 +233,10 @@ function openCodeCapabilitiesForModel(input: {
             },
           ]
         : []),
-      ...(agentOptions.length > 0
+      // A single choice is not a choice: with OpenCode's `plan` agent hidden
+      // and `build` the only remaining primary agent, the selector would just
+      // restate the default. Custom agents bring the descriptor back.
+      ...(agentOptions.length > 1
         ? [
             {
               id: "agent",
@@ -254,7 +251,9 @@ function openCodeCapabilitiesForModel(input: {
   });
 }
 
-function flattenOpenCodeModels(input: OpenCodeInventory): ReadonlyArray<ServerProviderModel> {
+export function flattenOpenCodeModels(
+  input: OpenCodeInventory,
+): ReadonlyArray<ServerProviderModel> {
   const connected = new Set(input.providerList.connected);
   const models: Array<ServerProviderModel> = [];
 
@@ -269,7 +268,18 @@ function flattenOpenCodeModels(input: OpenCodeInventory): ReadonlyArray<ServerPr
         continue;
       }
 
-      const subProvider = nonEmptyTrimmed(provider.name);
+      // The injected `t3-backend` entry is T3's harness bucket, not a model
+      // provider — never surface its display name ("T3 Backend"). With an
+      // upstream path in the model id the upstream is the subtitle; bare
+      // backend models fall back to the instance name.
+      const isBucket = isBackendBucketProviderId(provider.id);
+      const modelId = model.id.trim();
+      const upstreamSlash = isBucket ? modelId.indexOf("/") : -1;
+      const subProvider = isBucket
+        ? upstreamSlash > 0
+          ? modelId.slice(0, upstreamSlash)
+          : undefined
+        : nonEmptyTrimmed(provider.name);
       models.push({
         slug: `${provider.id}/${model.id}`,
         name,

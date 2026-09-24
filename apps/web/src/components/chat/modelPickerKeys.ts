@@ -52,13 +52,13 @@ export function parseModelPickerModelKey(
   };
 }
 
-export function modelPickerLegacySectionKey(instanceId: ProviderInstanceId): string {
-  return `${LEGACY_SECTION_KEY_PREFIX}${instanceId}`;
+export function modelPickerLegacySectionKey(scopeKey: string): string {
+  return `${LEGACY_SECTION_KEY_PREFIX}${scopeKey}`;
 }
 
-export function parseModelPickerLegacySectionKey(key: string): ProviderInstanceId | null {
+export function parseModelPickerLegacySectionKey(key: string): string | null {
   return key.startsWith(LEGACY_SECTION_KEY_PREFIX)
-    ? (key.slice(LEGACY_SECTION_KEY_PREFIX.length) as ProviderInstanceId)
+    ? key.slice(LEGACY_SECTION_KEY_PREFIX.length)
     : null;
 }
 

@@ -53,7 +53,6 @@ function turnStartCommand(input: {
       ...(input.context !== undefined ? { context: input.context } : {}),
     },
     runtimeMode: "full-access",
-    interactionMode: "default",
     createdAt: "2026-08-01T00:00:00.000Z",
   };
 }

@@ -60,7 +60,6 @@ function threadDetailToShell(
     title: thread.title,
     modelSelection: thread.modelSelection,
     runtimeMode: thread.runtimeMode,
-    interactionMode: thread.interactionMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     linkedPullRequest: thread.linkedPullRequest ?? null,
@@ -82,7 +81,6 @@ function threadDetailToShell(
     latestUserMessageAt: latestUserMessageAt(thread),
     hasPendingApprovals: false,
     hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
   };
 }
 

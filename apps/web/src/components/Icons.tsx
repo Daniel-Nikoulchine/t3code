@@ -849,6 +849,20 @@ export const KiloIcon: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+// Simple M mark for MiniMax Code; no official isolated glyph shipped.
+export const MinimaxIcon: Icon = ({ className, ...props }) => (
+  <svg {...props} viewBox="0 0 32 32" fill="none" className={className}>
+    <rect width="32" height="32" rx="7" fill="#1a1a1a" />
+    <path
+      d="M7 24V8l9 10 9-10v16"
+      stroke="#fff"
+      strokeWidth="3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 export const GithubCopilotIcon: Icon = ({ className, ...props }) => (
   <svg
     {...props}
@@ -902,6 +916,17 @@ export const ZcodeIcon: Icon = ({ className, ...props }) => (
     <rect width="512" height="512" rx="73" fill="#101113" />
     <path
       d="M89.0 128.2L89.0 150.0L158.3 150.0L227.5 150.0L231.5 148.1L235.5 146.3L238.1 143.4L240.8 140.5L252.0 124.5L263.2 108.5L263.6 107.5L264.0 106.5L176.5 106.4L89.0 106.3L89.0 128.2ZM288.7 110.2L286.3 113.5L184.1 258.3L81.9 403.2L81.3 404.6L80.8 406.0L150.6 406.0L220.5 406.0L324.0 259.4L427.5 112.8L429.3 109.9L431.2 107.0L361.1 107.0L291.1 107.0L288.7 110.2ZM280.5 363.9L276.5 365.7L273.9 368.6L271.3 371.5L259.7 388.1L248.0 404.8L248.0 405.4L248.0 406.0L335.5 406.0L423.0 406.0L423.0 384.0L423.0 362.0L353.8 362.0L284.5 362.0L280.5 363.9Z"
+      fill="#ffffff"
+    />
+  </svg>
+);
+
+// Freebuff free-mode mark: abstract "F" monogram on a dark rounded square.
+export const FreebuffIcon: Icon = ({ className, ...props }) => (
+  <svg {...props} viewBox="0 0 512 512" fill="none" className={className}>
+    <rect width="512" height="512" rx="73" fill="#0B1220" />
+    <path
+      d="M140 120h232c12 0 20 8 20 20v36c0 12-8 20-20 20H220v48h108c12 0 20 8 20 20v36c0 12-8 20-20 20H220v112c0 12-8 20-20 20h-40c-12 0-20-8-20-20V140c0-12 8-20 20-20z"
       fill="#ffffff"
     />
   </svg>

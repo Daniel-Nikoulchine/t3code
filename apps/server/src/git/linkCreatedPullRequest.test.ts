@@ -55,7 +55,6 @@ const thread: OrchestrationThreadShell = {
   title: "Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
   runtimeMode: "full-access",
-  interactionMode: "default",
   branch: null,
   worktreePath: null,
   pullRequests: [],
@@ -69,7 +68,6 @@ const thread: OrchestrationThreadShell = {
   latestUserMessageAt: "2026-08-20T00:00:00.000Z",
   hasPendingApprovals: false,
   hasPendingUserInput: false,
-  hasActionableProposedPlan: false,
 };
 
 function prResult(pr: GitRunStackedActionResult["pr"]): Pick<GitRunStackedActionResult, "pr"> {

@@ -7,7 +7,6 @@
 import {
   ApprovalRequestId,
   type ClineSettings,
-  EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -18,7 +17,6 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -31,21 +29,20 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
+import { discoverClineSkills } from "../Drivers/ClineSkills.ts";
 import {
-  discoverClineSkills,
-  hasClineSkillMention,
-  rewriteClineSkillMentions,
-} from "../Drivers/ClineSkills.ts";
+  hasSkillMentionForProvider,
+  rewriteSkillMentionsForProvider,
+} from "../Drivers/SkillProviders.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -54,6 +51,15 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  makeEventStamper,
+  makeThreadLockRegistry,
+  requireScaffoldSession,
+  settlePendingApprovalsAsCancelled,
+  stopScaffoldSession,
+  makeExtensionFailureMapper,
+  parseAcpResumeCursor,
+} from "../acp/AcpAdapterScaffold.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -69,10 +75,15 @@ import {
   applyClineAcpAutoApprove,
   applyClineAcpModelSelection,
   makeClineAcpRuntime,
+  normalizeClineThinkingLevel,
   resolveClineModelId,
 } from "../acp/ClineAcpSupport.ts";
 import { type ClineAdapterShape } from "../Services/ClineAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  selectSessionFirstAutoApprovedPermissionOption,
+  selectSessionFirstPermissionOptionId,
+} from "./permissionOptionSelection.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("cline");
@@ -145,58 +156,34 @@ interface ClineSessionContext {
    * the session on the endpoint the user selected.
    */
   appliedModel: string | undefined;
-  appliedInteractionMode: "default" | "plan" | undefined;
-}
-
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingApprovals.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  /**
+   * Thinking level the live ACP child was spawned with (`--thinking`).
+   * ACP exposes no effort config option, so a changed picker level cannot
+   * be written into the running session — the adapter restarts it instead
+   * (see `requiresNewThreadForModelChange: false`, session restart keeps
+   * the thread).
+   */
+  appliedThinkingLevel: string | undefined;
 }
 
 function parseClineResume(raw: unknown): { sessionId: string } | undefined {
-  if (!isRecord(raw)) return undefined;
-  if (raw.schemaVersion !== CLINE_RESUME_VERSION) return undefined;
-  if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  return { sessionId: raw.sessionId.trim() };
+  return parseAcpResumeCursor(raw, CLINE_RESUME_VERSION);
 }
 
 /**
  * Cline permission modes are not ACP session modes: tools are gated by the
  * `auto_approve` session option plus T3's `session/request_permission`
- * handler. Session modes are only plan/act (see `resolveClineInteractionMode`).
+ * handler. T3 always runs Cline in act mode (plan mode removed).
  */
-export function resolveClineInteractionMode(
-  interactionMode: "default" | "plan" | null | undefined,
-): string | undefined {
-  if (interactionMode === "plan") return "plan";
-  if (interactionMode === "default") return "act";
-  return undefined;
-}
-
-function applyClineInteractionMode<E>(input: {
+function applyClineActMode<E>(input: {
   readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setMode">;
-  readonly interactionMode: "default" | "plan" | null | undefined;
   readonly mapError: (context: {
     readonly cause: import("effect-acp/errors").AcpError;
     readonly method: "session/set_mode";
   }) => E;
 }): Effect.Effect<void, E> {
-  const modeId = resolveClineInteractionMode(input.interactionMode);
-  if (!modeId) return Effect.void;
   return input.runtime
-    .setMode(modeId)
+    .setMode("act")
     .pipe(Effect.mapError((cause) => input.mapError({ cause, method: "session/set_mode" })));
 }
 
@@ -240,44 +227,14 @@ function applyRequestedSessionConfiguration<E>(input: {
 export function selectClineAutoApprovedPermissionOption(
   request: EffectAcpSchema.RequestPermissionRequest,
 ): string | undefined {
-  const allowSessionOption = request.options.find((option) => option.optionId === "allow_session");
-  if (allowSessionOption?.optionId.trim()) {
-    return allowSessionOption.optionId.trim();
-  }
-
-  const allowOnceOption =
-    request.options.find((option) => option.optionId === "allow_once") ??
-    request.options.find((option) => option.kind === "allow_once");
-  if (typeof allowOnceOption?.optionId === "string" && allowOnceOption.optionId.trim()) {
-    return allowOnceOption.optionId.trim();
-  }
-
-  return undefined;
+  return selectSessionFirstAutoApprovedPermissionOption(request);
 }
 
 export function selectClinePermissionOptionId(
   request: EffectAcpSchema.RequestPermissionRequest,
   decision: Exclude<ProviderApprovalDecision, "cancel">,
 ): string | undefined {
-  const preferredIds =
-    decision === "acceptForSession"
-      ? ["allow_session", "allow_always"]
-      : decision === "accept"
-        ? ["allow_once"]
-        : ["deny"];
-  for (const id of preferredIds) {
-    const exact = request.options.find((option) => option.optionId === id);
-    if (exact?.optionId.trim()) return exact.optionId.trim();
-  }
-  const fallbackKind =
-    decision === "acceptForSession"
-      ? "allow_always"
-      : decision === "accept"
-        ? "allow_once"
-        : "reject_once";
-  return (
-    request.options.find((option) => option.kind === fallbackKind)?.optionId.trim() || undefined
-  );
+  return selectSessionFirstPermissionOptionId(request, decision);
 }
 
 function permissionOutcome(
@@ -316,57 +273,24 @@ export function makeClineAdapter(clineSettings: ClineSettings, options?: ClineAd
     const makeAcpNativeLoggers = yield* makeAcpNativeLoggerFactory();
 
     const sessions = new Map<ThreadId, ClineSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "crypto/randomUUIDv4",
-            detail: "Failed to generate Cline runtime identifier.",
-            cause,
-          }),
-      ),
+    const locks = yield* makeThreadLockRegistry;
+    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+      locks.withThreadLock(threadId, effect);
+    const stamper = yield* makeEventStamper({
+      provider: PROVIDER,
+      detail: "Failed to generate Cline runtime identifier.",
+    });
+    const nowIso = stamper.nowIso;
+    const randomUUIDv4 = stamper.randomUUIDv4;
+    const makeEventStamp = stamper.makeEventStamp;
+    const mapExtensionFailure = makeExtensionFailureMapper(
+      "Failed to process Cline ACP extension event.",
     );
-    const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
-    const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const mapExtensionFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new EffectAcpErrors.AcpTransportError({
-              detail: "Failed to process Cline ACP extension event.",
-              cause,
-            }),
-        ),
-      );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (
       threadId: ThreadId,
@@ -427,42 +351,16 @@ export function makeClineAdapter(clineSettings: ClineSettings, options?: ClineAd
         );
       });
 
-    const requireSession = (
-      threadId: ThreadId,
-    ): Effect.Effect<ClineSessionContext, ProviderAdapterSessionNotFoundError> => {
-      const ctx = sessions.get(threadId);
-      if (!ctx || ctx.stopped) {
-        return Effect.fail(
-          new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
-        );
-      }
-      return Effect.succeed(ctx);
-    };
+    const requireSession = requireScaffoldSession(sessions, PROVIDER);
 
     const stopSessionInternal = (ctx: ClineSessionContext) =>
-      Effect.gen(function* () {
-        if (ctx.stopped) return;
-        ctx.stopped = true;
-        yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        if (ctx.notificationFiber) {
-          yield* Fiber.interrupt(ctx.notificationFiber);
-        }
-        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
-        sessions.delete(ctx.threadId);
-        // Release the per-thread semaphore so starting and stopping sessions
-        // does not grow threadLocksRef for the adapter's lifetime.
-        yield* SynchronizedRef.update(threadLocksRef, (current) => {
-          const next = new Map(current);
-          next.delete(ctx.threadId);
-          return next;
-        });
-        yield* offerRuntimeEvent({
-          type: "session.exited",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
-        });
+      stopScaffoldSession({
+        ctx,
+        sessions,
+        releaseThreadLock: locks.releaseThreadLock,
+        offerRuntimeEvent,
+        makeEventStamp,
+        provider: PROVIDER,
       });
 
     const startSession: ClineAdapterShape["startSession"] = (input) =>
@@ -523,12 +421,17 @@ export function makeClineAdapter(clineSettings: ClineSettings, options?: ClineAd
           };
 
           const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+          const startThinkingLevel =
+            normalizeClineThinkingLevel(
+              getModelSelectionStringOptionValue(clineModelSelection, "reasoningEffort"),
+            ) ?? "medium";
           const acp = yield* makeClineAcpRuntime({
             clineSettings: effectiveClineSettings,
             environment: interactiveEnvironment,
             childProcessSpawner,
             cwd,
             runtimeMode: input.runtimeMode,
+            reasoningEffort: startThinkingLevel,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "t3-code", version: "0.0.0" },
             ...(mcpSession
@@ -681,7 +584,7 @@ export function makeClineAdapter(clineSettings: ClineSettings, options?: ClineAd
             // `session.model` above) so the first sendTurn without an explicit
             // selection compares equal and skips a redundant `set_model` RPC.
             appliedModel: configuredModel ?? currentModel ?? "default",
-            appliedInteractionMode: undefined,
+            appliedThinkingLevel: startThinkingLevel,
           };
 
           const nf = yield* Stream.runDrain(
@@ -924,7 +827,7 @@ export function makeClineAdapter(clineSettings: ClineSettings, options?: ClineAd
             // Cline invokes skills natively as `/name`; the composer inserts
             // `$name`. Rewrite known mentions so the agent sees its own form.
             let clineSkillNames = ctx.clineSkillNames;
-            if (hasClineSkillMention(rawPrompt) && clineSkillNames === undefined) {
+            if (hasSkillMentionForProvider("cline", rawPrompt) && clineSkillNames === undefined) {
               const skills = yield* discoverClineSkills(undefined, options?.environment).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
@@ -937,7 +840,7 @@ export function makeClineAdapter(clineSettings: ClineSettings, options?: ClineAd
               ctx.clineSkillNames = clineSkillNames;
             }
             const prompt = clineSkillNames
-              ? rewriteClineSkillMentions(rawPrompt, clineSkillNames)
+              ? rewriteSkillMentionsForProvider("cline", rawPrompt, clineSkillNames)
               : rawPrompt;
             promptParts.push({ type: "text", text: prompt });
           }
@@ -1030,19 +933,47 @@ export function makeClineAdapter(clineSettings: ClineSettings, options?: ClineAd
             });
             ctx.appliedModel = resolvedModel;
           }
-          const requestedInteractionMode = input.interactionMode;
-          if (
-            requestedInteractionMode !== undefined &&
-            ctx.appliedInteractionMode !== requestedInteractionMode
-          ) {
-            yield* applyClineInteractionMode({
-              runtime: ctx.acp,
-              interactionMode: requestedInteractionMode,
-              mapError: ({ cause, method }) =>
-                mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-            });
-            ctx.appliedInteractionMode = requestedInteractionMode;
+          // Thinking rides process spawn (`--thinking`): ACP exposes no
+          // effort config option, so a changed picker level restarts the
+          // session with the new flag. Same-thread restart keeps the T3
+          // thread; startSession stops the old child first. Runs under the
+          // thread lock: the outer sendTurn already holds its own permit,
+          // and semaphores here are reentrant-safe via withPermit nesting.
+          const requestedThinkingLevel =
+            normalizeClineThinkingLevel(
+              getModelSelectionStringOptionValue(turnModelSelection, "reasoningEffort"),
+            ) ?? "medium";
+          if (requestedThinkingLevel !== ctx.appliedThinkingLevel) {
+            const restarted = yield* withThreadLock(
+              input.threadId,
+              startSession({
+                threadId: input.threadId,
+                cwd: ctx.session.cwd,
+                runtimeMode: ctx.session.runtimeMode,
+                ...(turnModelSelection === undefined ? {} : { modelSelection: turnModelSelection }),
+              }),
+            ).pipe(Effect.exit);
+            if (Exit.isFailure(restarted)) {
+              return yield* Effect.failCause(restarted.cause);
+            }
+            const fresh = sessions.get(input.threadId);
+            if (fresh === undefined || fresh.stopped) {
+              return yield* new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/start",
+                detail: "Cline session restart for the new thinking level failed.",
+              });
+            }
           }
+          yield* applyClineActMode({
+            runtime: ctx.acp,
+            mapError: ({ cause, method }) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logDebug("Cline act mode toggle skipped.", { cause }),
+            ),
+          );
           if (steeringTurnId === undefined) {
             ctx.lastPlanFingerprint = undefined;
           }

@@ -47,7 +47,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json,
           fallback_combo_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           linked_pull_request_json,
@@ -69,7 +68,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           deleted_at
         )
         VALUES (
@@ -80,7 +78,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${JSON.stringify(row.modelSelection)},
           ${row.combo === undefined || row.combo === null ? null : JSON.stringify(row.combo)},
           ${row.runtimeMode},
-          ${row.interactionMode},
           ${row.branch},
           ${row.worktreePath},
           ${row.linkedPullRequest === undefined || row.linkedPullRequest === null ? null : JSON.stringify(row.linkedPullRequest)},
@@ -102,7 +99,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.latestUserMessageAt},
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
-          ${row.hasActionableProposedPlan},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -113,7 +109,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json = excluded.model_selection_json,
           fallback_combo_json = excluded.fallback_combo_json,
           runtime_mode = excluded.runtime_mode,
-          interaction_mode = excluded.interaction_mode,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           linked_pull_request_json = excluded.linked_pull_request_json,
@@ -135,7 +130,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at = excluded.latest_user_message_at,
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
-          has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -153,7 +147,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           fallback_combo_json AS "combo",
           runtime_mode AS "runtimeMode",
-          interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -175,7 +168,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
-          has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -195,7 +187,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           fallback_combo_json AS "combo",
           runtime_mode AS "runtimeMode",
-          interaction_mode AS "interactionMode",
           branch,
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
@@ -217,7 +208,6 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
-          has_actionable_proposed_plan AS "hasActionableProposedPlan",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

@@ -1,4 +1,3 @@
-import { resolvePlanFollowUpSubmission } from "../../proposedPlan";
 import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 import {
   PullRequestAction,
@@ -1086,13 +1085,13 @@ describe("asking about a change rather than working on it", () => {
   it.each(["", "Please consider "])("preserves PR plan feedback with prose %j", (prose) => {
     const comment = buildPullRequestReferenceContext(base);
     const draftText = prose + formatInlineContextReference(reviewCommentContextReference(comment));
-    const submission = resolvePlanFollowUpSubmission({ draftText, planMarkdown: "# Plan" });
+    const submission = { text: draftText };
     const context = buildMessageContext({
       terminalContexts: [],
       previewAnnotations: [],
       reviewComments: [comment],
     });
-    expect(submission).toEqual({ text: draftText, interactionMode: "plan" });
+    expect(submission).toEqual({ text: draftText });
     expect(context?.records[0]).toMatchObject({ pullRequest: base });
     const legacyText = serializeLegacyContextMessage({
       text: submission.text,

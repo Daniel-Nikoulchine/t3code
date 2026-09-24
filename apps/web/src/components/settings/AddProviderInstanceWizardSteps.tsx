@@ -9,6 +9,7 @@ interface AddProviderInstanceWizardStepsProps {
   readonly currentStep: number;
   readonly summaries: readonly (string | null)[];
   readonly instanceIdError: string | null;
+  readonly driverError?: string | null;
   readonly onNavigation: (navigation: WizardNavigation) => void;
 }
 
@@ -16,6 +17,7 @@ export function AddProviderInstanceWizardSteps({
   currentStep,
   summaries,
   instanceIdError,
+  driverError = null,
   onNavigation,
 }: AddProviderInstanceWizardStepsProps) {
   return (
@@ -27,6 +29,7 @@ export function AddProviderInstanceWizardSteps({
         onNavigation(
           resolveWizardNavigation(currentStep, requestedStep, ADD_PROVIDER_WIZARD_STEPS.length, {
             instanceIdError,
+            driverError,
           }),
         )
       }

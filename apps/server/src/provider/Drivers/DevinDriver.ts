@@ -32,7 +32,7 @@ import {
   enrichDevinSnapshot,
 } from "../Layers/DevinProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -41,17 +41,11 @@ import {
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
+  resolveDriverMaintenance,
   makeProviderMaintenanceCapabilities,
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 import { probeDevinSkills } from "./DevinSkills.ts";
 const decodeDevinSettings = Schema.decodeSync(DevinSettings);
 
@@ -94,7 +88,15 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
   },
   configSchema: DevinSettings,
   defaultConfig: (): DevinSettings => decodeDevinSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -114,18 +116,15 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend: undefined,
+        nativeFallback,
       });
       const effectiveConfig = { ...config, enabled } satisfies DevinSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makeDevinAdapter(effectiveConfig, {
         environment: processEnv,
@@ -142,39 +141,19 @@ export const DevinDriver: ProviderDriver<DevinSettings, DevinDriverEnv> = {
         Effect.provideService(Path.Path, path),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<DevinSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "Devin snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance,
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialDevinProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialDevinProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
-              enrichDevinSnapshot({
-                snapshot: currentSnapshot,
-                maintenanceCapabilities,
-                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                publishSnapshot,
-                httpClient,
-              }),
-            ),
-            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          ),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build Devin snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichDevinSnapshot,
+        httpClient,
+      });
 
       return {
         instanceId,

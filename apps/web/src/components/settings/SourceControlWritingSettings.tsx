@@ -312,7 +312,7 @@ export function SourceControlWritingSettingsSection() {
                     ? {
                         onOpenProviderSetup: (instanceId: ProviderInstanceId) => {
                           void navigate({
-                            to: "/settings/providers",
+                            to: "/settings/harness",
                             search: { environmentId, instanceId },
                           });
                         },

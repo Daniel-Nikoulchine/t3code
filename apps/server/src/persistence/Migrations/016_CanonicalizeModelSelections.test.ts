@@ -154,7 +154,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
           NULL,
           'correlation-thread-created',
           'user',
-          '{"threadId":"thread-1","projectId":"project-1","title":"Thread","model":"claude-opus-4-6","modelOptions":{"codex":{"reasoningEffort":"high"},"claudeAgent":{"effort":"max","thinking":false}},"runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
+          '{"threadId":"thread-1","projectId":"project-1","title":"Thread","model":"claude-opus-4-6","modelOptions":{"codex":{"reasoningEffort":"high"},"claudeAgent":{"effort":"max","thinking":false}},"runtimeMode":"full-access","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
           '{}'
         ),
         (
@@ -168,7 +168,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
           NULL,
           'correlation-thread-created-fallback',
           'user',
-          '{"threadId":"thread-2","projectId":"project-1","title":"Fallback Thread","model":"gpt-5.4","modelOptions":{"claudeAgent":{"effort":"max"}},"runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
+          '{"threadId":"thread-2","projectId":"project-1","title":"Fallback Thread","model":"gpt-5.4","modelOptions":{"claudeAgent":{"effort":"max"}},"runtimeMode":"full-access","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
           '{}'
         ),
         (
@@ -196,7 +196,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
           NULL,
           'correlation-thread-created-no-model',
           'user',
-          '{"threadId":"thread-3","projectId":"project-1","title":"Ancient Thread","runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
+          '{"threadId":"thread-3","projectId":"project-1","title":"Ancient Thread","runtimeMode":"full-access","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
           '{}'
         )
       `;
@@ -321,7 +321,6 @@ layer("016_CanonicalizeModelSelections", (it) => {
               },
             },
             runtimeMode: "full-access",
-            interactionMode: "default",
             branch: null,
             worktreePath: null,
             createdAt: "2026-01-01T00:00:00.000Z",
@@ -340,7 +339,6 @@ layer("016_CanonicalizeModelSelections", (it) => {
               },
             },
             runtimeMode: "full-access",
-            interactionMode: "default",
             branch: null,
             worktreePath: null,
             createdAt: "2026-01-01T00:00:00.000Z",
@@ -370,7 +368,6 @@ layer("016_CanonicalizeModelSelections", (it) => {
               model: "gpt-5.4",
             },
             runtimeMode: "full-access",
-            interactionMode: "default",
             branch: null,
             worktreePath: null,
             createdAt: "2026-01-01T00:00:00.000Z",

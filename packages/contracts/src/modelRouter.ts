@@ -50,6 +50,13 @@ export const ModelRouterRoute = Schema.Struct({
    * this: the fallback is the *route key*, which only the resolver knows.
    */
   upstreamModel: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Force the Responses wire protocol upstream even for chat-shaped inbound
+   * (the proxy translates). For upstreams that only serve a model on
+   * `/responses` (verified live: opencode-go grok-4.6 and the muse-spark
+   * contributor tier reject `/chat/completions`).
+   */
+  upstreamResponses: Schema.optional(Schema.Boolean),
 });
 export type ModelRouterRoute = typeof ModelRouterRoute.Type;
 

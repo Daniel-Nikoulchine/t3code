@@ -54,7 +54,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   terminalOpen?: boolean;
   open?: boolean;
   triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
-  triggerClassName?: string;
+  triggerClassName?: string | undefined;
   /** Aggregate settings can show a neutral value without claiming one provider is selected. */
   triggerLabel?: string;
   triggerAriaLabel?: string;

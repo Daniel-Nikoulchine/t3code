@@ -1,6 +1,5 @@
 import {
   CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   ProjectId,
   ThreadId,
@@ -64,7 +63,6 @@ const seedReadModel = Effect.gen(function* () {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "approval-required",
       branch: null,
       worktreePath: null,
@@ -92,7 +90,6 @@ const seedReadModel = Effect.gen(function* () {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5-codex",
       },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "approval-required",
       branch: null,
       worktreePath: null,

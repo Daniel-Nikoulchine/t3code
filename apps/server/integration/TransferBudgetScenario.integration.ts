@@ -3,7 +3,6 @@ import {
   defaultInstanceIdForDriver,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   ORCHESTRATION_WS_METHODS,
   type OrchestrationShellStreamItem,
@@ -84,7 +83,6 @@ export const seedTransferBudgetHistory = Effect.fn("TransferBudget.seedHistory")
     title: `${provider} transfer history`,
     modelSelection,
     runtimeMode: "approval-required",
-    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
     branch: "main",
     worktreePath: harness.workspaceDir,
     createdAt: turnTimestamp(0),
@@ -110,7 +108,6 @@ export const seedTransferBudgetHistory = Effect.fn("TransferBudget.seedHistory")
       },
       modelSelection,
       runtimeMode: "approval-required",
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       createdAt: turnTimestamp(turnIndex),
     });
     yield* waitForTurnQuiesced(harness, turnIndex + 1);

@@ -19,7 +19,7 @@ import {
   enrichOpenClawSnapshot,
 } from "../Layers/OpenClawProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -29,17 +29,11 @@ import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import { discoverOpenClawSkills } from "./OpenClawSkills.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
   makeProviderMaintenanceCapabilities,
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
+  resolveDriverMaintenance,
 } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 const decodeOpenClawSettings = Schema.decodeSync(OpenClawSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("openclaw");
@@ -81,7 +75,15 @@ export const OpenClawDriver: ProviderDriver<OpenClawSettings, OpenClawDriverEnv>
   },
   configSchema: OpenClawSettings,
   defaultConfig: (): OpenClawSettings => decodeOpenClawSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -102,18 +104,15 @@ export const OpenClawDriver: ProviderDriver<OpenClawSettings, OpenClawDriverEnv>
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend: undefined,
+        nativeFallback,
       });
       const effectiveConfig = { ...config, enabled } satisfies OpenClawSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, pathService),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makeOpenClawAdapter(effectiveConfig, {
         environment: processEnv,
@@ -128,40 +127,19 @@ export const OpenClawDriver: ProviderDriver<OpenClawSettings, OpenClawDriverEnv>
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<OpenClawSettings>>(
-        {
-          resolveMaintenance,
-          getSettings: snapshotSettings.getSettings,
-          streamSettings: snapshotSettings.streamSettings,
-          haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-          initialSnapshot: (settings) =>
-            buildInitialOpenClawProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
-          checkProvider,
-          enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-            resolveMaintenance().pipe(
-              Effect.flatMap((maintenanceCapabilities) =>
-                enrichOpenClawSnapshot({
-                  snapshot: currentSnapshot,
-                  maintenanceCapabilities,
-                  enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                  publishSnapshot,
-                  httpClient,
-                }),
-              ),
-            ),
-        },
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build OpenClaw snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "OpenClaw snapshot",
+        effectiveConfig,
+        serverSettings,
+        resolveMaintenance,
+        buildInitialSnapshot: (provider) =>
+          buildInitialOpenClawProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
+        checkProvider,
+        enrichSnapshot: enrichOpenClawSnapshot,
+        httpClient,
+      });
       const snapshotForCwd = (workspaceCwd: string) =>
         !effectiveConfig.enabled
           ? snapshot.getSnapshot

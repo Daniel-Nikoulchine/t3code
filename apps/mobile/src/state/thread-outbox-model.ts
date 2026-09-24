@@ -12,21 +12,17 @@ import {
   ModelSelection,
   OrchestrationMessageContext,
   ProjectId,
-  ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
   type ModelSelection as ModelSelectionType,
   type ProjectId as ProjectIdType,
-  type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
-  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
-import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
 
 // Keep current writes until a compatible native baseline includes the v4 reader.
 const THREAD_OUTBOX_SCHEMA_VERSION = 3;
@@ -55,7 +51,6 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
-  interactionMode: Schema.optional(ProviderInteractionMode),
   // Present when the queued item creates a brand-new thread (pending task)
   // instead of appending a turn to an existing one.
   creation: Schema.optional(QueuedThreadCreationSchema),
@@ -85,7 +80,6 @@ export interface QueuedThreadMessage {
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
-  readonly interactionMode?: ProviderInteractionModeType;
   readonly creation?: QueuedThreadCreation;
   readonly createdAt: string;
 }
@@ -93,25 +87,15 @@ export interface QueuedThreadMessage {
 export interface ThreadSettingsSnapshot {
   readonly modelSelection: ModelSelectionType;
   readonly runtimeMode: RuntimeModeType;
-  readonly interactionMode: ProviderInteractionModeType;
 }
 
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
-  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "showInteractionModeToggle">> = [],
 ): ThreadSettingsSnapshot {
-  const modelSelection = message.modelSelection ?? thread.modelSelection;
-  const provider = providers.find(
-    (candidate) => candidate.instanceId === modelSelection.instanceId,
-  );
   return {
-    modelSelection,
+    modelSelection: message.modelSelection ?? thread.modelSelection,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: resolveProviderInteractionMode(
-      provider,
-      message.interactionMode ?? thread.interactionMode,
-    ),
   };
 }
 

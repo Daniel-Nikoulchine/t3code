@@ -5,11 +5,11 @@ import { ProviderBackendsPanel } from "../components/settings/ProviderBackendsPa
 import { useSettingsScope } from "../components/settings/SettingsScopeContext";
 
 /**
- * All provider settings live on this tab (connections, API keys, the models
- * matrix, and the harness instance editor), scoped to one environment: the
- * chosen one, or the representative of the selection. A project crumb narrows
- * the candidates to the environments that project is registered on. The old
- * `/settings/harness` route redirects here, carrying its search along.
+ * All model backend settings live on this tab (connections, API keys,
+ * routing), scoped to one environment: the chosen one, or the
+ * representative of the selection. A project crumb narrows the candidates
+ * to the environments that project is registered on. Harness instances
+ * live on the Harness tab.
  */
 function SettingsProvidersRoute() {
   const { instanceId } = Route.useSearch();

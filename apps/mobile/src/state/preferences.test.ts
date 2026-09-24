@@ -99,11 +99,11 @@ describe("mobile preferences state", () => {
       const unmountUpdate = registry.mount(state.updatePreferencesAtom);
 
       registry.set(state.updatePreferencesAtom, {
-        collapsedProjectGroups: ["project:new"],
+        connectOnboardingOptOutAccounts: ["account:new"],
       });
       pendingLoad.resolve({
         baseFontSize: 18,
-        collapsedProjectGroups: ["project:old"],
+        connectOnboardingOptOutAccounts: ["account:old"],
       });
 
       const preferences = yield* AtomRegistry.getResult(registry, state.preferencesAtom, {
@@ -111,10 +111,10 @@ describe("mobile preferences state", () => {
       });
       expect(preferences).toEqual({
         baseFontSize: 18,
-        collapsedProjectGroups: ["project:new"],
+        connectOnboardingOptOutAccounts: ["account:new"],
       });
       expect(savePatch).toHaveBeenCalledWith({
-        collapsedProjectGroups: ["project:new"],
+        connectOnboardingOptOutAccounts: ["account:new"],
       });
       expect(AsyncResult.isFailure(registry.get(state.updatePreferencesAtom))).toBe(false);
 

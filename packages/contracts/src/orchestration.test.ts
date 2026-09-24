@@ -5,7 +5,6 @@ import * as Schema from "effect/Schema";
 import { CommandId, ProjectId, ThreadId } from "./baseSchemas.ts";
 
 import {
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type ChatImageAttachment,
   ClientOrchestrationCommand,
@@ -15,10 +14,8 @@ import {
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
-  OrchestrationLatestTurn,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
-  OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadShell,
@@ -50,8 +47,6 @@ const decodeThreadMessageSentPayload = Schema.decodeUnknownEffect(ThreadMessageS
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
-const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
-const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
@@ -250,7 +245,6 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
     });
     assert.strictEqual(parsed.modelSelection, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
-    assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
 );
 
@@ -289,7 +283,6 @@ it.effect("accepts inline images, uploaded images, and uploaded files from clien
         ],
       },
       runtimeMode: "full-access",
-      interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
@@ -508,7 +501,6 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
     });
     assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
     assert.strictEqual(parsed.runtimeMode, "full-access");
-    assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
 );
 
@@ -533,7 +525,6 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
             model: "gpt-5.4",
           },
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: "2026-01-01T00:00:00.000Z",
@@ -565,7 +556,6 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
         provider: "codex",
         model: "gpt-5.4",
       },
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -665,7 +655,6 @@ it.effect("round-trips a fallback combo through thread.created", () =>
       title: "Thread title",
       modelSelection: { instanceId: "codex", model: "gpt-5.4" },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       combo: {
@@ -693,7 +682,6 @@ it.effect("decodes legacy threads and payloads without a combo as undefined", ()
       projectId: "project-1",
       title: "Legacy thread",
       modelSelection: { provider: "codex", model: "gpt-5.4" },
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -714,7 +702,6 @@ it.effect("decodes legacy threads and payloads without a combo as undefined", ()
       title: "Legacy thread",
       modelSelection: { provider: "codex", model: "gpt-5.4" },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       latestTurn: null,
@@ -735,7 +722,6 @@ it.effect("decodes legacy threads and payloads without a combo as undefined", ()
       title: "Legacy thread",
       modelSelection: { provider: "codex", model: "gpt-5.4" },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       latestTurn: null,
@@ -746,7 +732,6 @@ it.effect("decodes legacy threads and payloads without a combo as undefined", ()
       latestUserMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
     });
     assert.strictEqual(shell.combo, undefined);
   }),
@@ -807,7 +792,6 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
       title: "Historical thread",
       modelSelection: { provider: "codex", model: "gpt-5.4" },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       latestTurn: null,
@@ -820,7 +804,6 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
       ...common,
       deletedAt: null,
       messages: [],
-      proposedPlans: [],
       activities: [],
       checkpoints: [],
     });
@@ -829,7 +812,6 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
       latestUserMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
     });
 
     assert.strictEqual(thread.settledOverride, null);
@@ -851,7 +833,6 @@ it.effect("defaults settled fields when decoding historical thread data", () =>
       latestUserMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
       linkedPullRequest: legacyLink,
     });
     assert.deepStrictEqual(oldServerShell.pullRequests, []);
@@ -900,7 +881,6 @@ it.effect("decodes thread pull request links with snapshot and stack", () =>
       latestUserMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
       pullRequests: [
         {
           host: "github.com",
@@ -1364,62 +1344,15 @@ it.effect("rejects an explicit title combined with title regeneration", () =>
   }),
 );
 
-it.effect("accepts a source proposed plan reference in thread.turn.start", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeThreadTurnStartCommand({
-      type: "thread.turn.start",
-      commandId: "cmd-turn-source-plan",
-      threadId: "thread-2",
-      message: {
-        messageId: "msg-source-plan",
-        role: "user",
-        text: "implement this",
-        attachments: [],
-      },
-      sourceProposedPlan: {
-        threadId: "thread-1",
-        planId: "plan-1",
-      },
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.deepStrictEqual(parsed.sourceProposedPlan, {
-      threadId: "thread-1",
-      planId: "plan-1",
-    });
-  }),
-);
-
-it.effect(
-  "decodes thread.turn-start-requested defaults for provider, runtime mode, and interaction mode",
-  () =>
-    Effect.gen(function* () {
-      const parsed = yield* decodeThreadTurnStartRequestedPayload({
-        threadId: "thread-1",
-        messageId: "msg-1",
-        createdAt: "2026-01-01T00:00:00.000Z",
-      });
-      assert.strictEqual(parsed.modelSelection, undefined);
-      assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
-      assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
-      assert.strictEqual(parsed.sourceProposedPlan, undefined);
-    }),
-);
-
-it.effect("decodes thread.turn-start-requested source proposed plan metadata when present", () =>
+it.effect("decodes thread.turn-start-requested defaults for provider and runtime mode", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartRequestedPayload({
-      threadId: "thread-2",
-      messageId: "msg-2",
-      sourceProposedPlan: {
-        threadId: "thread-1",
-        planId: "plan-1",
-      },
+      threadId: "thread-1",
+      messageId: "msg-1",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.deepStrictEqual(parsed.sourceProposedPlan, {
-      threadId: "thread-1",
-      planId: "plan-1",
-    });
+    assert.strictEqual(parsed.modelSelection, undefined);
+    assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
   }),
 );
 
@@ -1432,27 +1365,6 @@ it.effect("decodes thread.turn-start-requested title seed when present", () =>
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.titleSeed, "Investigate reconnect failures");
-  }),
-);
-
-it.effect("decodes latest turn source proposed plan metadata when present", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeOrchestrationLatestTurn({
-      turnId: "turn-2",
-      state: "running",
-      requestedAt: "2026-01-01T00:00:00.000Z",
-      startedAt: "2026-01-01T00:00:01.000Z",
-      completedAt: null,
-      assistantMessageId: null,
-      sourceProposedPlan: {
-        threadId: "thread-1",
-        planId: "plan-1",
-      },
-    });
-    assert.deepStrictEqual(parsed.sourceProposedPlan, {
-      threadId: "thread-1",
-      planId: "plan-1",
-    });
   }),
 );
 
@@ -1469,36 +1381,6 @@ it.effect("decodes orchestration session runtime mode defaults", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
-  }),
-);
-
-it.effect("defaults proposed plan implementation metadata for historical rows", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeOrchestrationProposedPlan({
-      id: "plan-1",
-      turnId: "turn-1",
-      planMarkdown: "# Plan",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.strictEqual(parsed.implementedAt, null);
-    assert.strictEqual(parsed.implementationThreadId, null);
-  }),
-);
-
-it.effect("preserves proposed plan implementation metadata when present", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeOrchestrationProposedPlan({
-      id: "plan-2",
-      turnId: "turn-2",
-      planMarkdown: "# Plan",
-      implementedAt: "2026-01-02T00:00:00.000Z",
-      implementationThreadId: "thread-2",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-02T00:00:00.000Z",
-    });
-    assert.strictEqual(parsed.implementedAt, "2026-01-02T00:00:00.000Z");
-    assert.strictEqual(parsed.implementationThreadId, "thread-2");
   }),
 );
 

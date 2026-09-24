@@ -33,11 +33,20 @@ Signing in with `kilo auth login` covers Kilo Gateway models. Direct provider ke
 set the matching environment variable on the Kilo instance (for example `ANTHROPIC_API_KEY` or
 `OPENAI_API_KEY`) and T3 Code treats the instance as authenticated.
 
+## External model providers
+
+A Kilo instance can run connection models through a shared OpenAI-compatible
+endpoint instead of its own login. Pick a connection on the instance under
+**Settings > Providers** (Direct means its own login). Connection models then
+appear as `t3-backend/<slug>` next to the native `kilo/*` entries, from an
+injected `KILO_CONFIG_CONTENT` provider block. T3 Code keeps your own config
+content and only replaces its own `t3-backend` entry.
+
 ## Permissions and active turns
 
 Kilo has no separate approval-mode switch: every tool permission arrives as an approval prompt
-in T3 Code. Approval buttons use the choices returned by Kilo, preferring the session-scoped
-choice, and Full access mode approves them automatically.
+in T3 Code. Approval buttons use the choices returned by Kilo, and Full access mode approves
+them automatically (see [Permissions](./providers.md#permissions)).
 
 Plain-text messages sent while Kilo is working redirect the active turn. Images are sent through
 Kilo's ACP image support. Kilo slash commands advertised by the running CLI appear in the

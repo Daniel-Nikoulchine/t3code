@@ -36,6 +36,7 @@ import {
   MODEL_CREDENTIAL_VALUE_REDACTED,
   providerInstanceConfigEnabledFlag,
   ProviderInstanceId,
+  T3_ROUTER_CONNECTION_ID,
   type ModelBackendConfig,
   type ModelBackendConnections,
   type ModelCredentials,
@@ -56,6 +57,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { buildUnavailableProviderSnapshot } from "../unavailableProviderSnapshot.ts";
+import { orphanBackendConnectionId } from "../harnessMaterial.ts";
 import {
   ProviderInstanceRegistry,
   type ProviderInstanceRegistryShape,
@@ -134,17 +136,25 @@ const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown
  *
  * Absent `connectionId` means native. An orphan `connectionId` (no matching
  * map entry, e.g. after the connection was deleted) also stays native —
- * silently, no error. Deleting a connection must never leave referencing
+ * no error. Deleting a connection must never leave referencing
  * instances in a broken state; they simply fall back to direct harness
- * connections. The settings UI surfaces the orphan hint (UI task).
+ * connections. The registry logs the fallback (see `orphanBackendConnectionId`)
+ * and the settings UI surfaces the orphan hint (UI task).
  *
  * A credential reference (`ModelProxyConfig.apiKeyCredentialId`) resolves
  * against the credentials map — the registry receives materialized
  * settings, so values are real keys. An empty value means "no key" and the
  * redaction sentinel is never mistaken for one; either leaves the backend
  * keyless rather than sending a placeholder upstream.
+ *
+ * The reserved `t3-router` id resolves to a `t3-router` backend (route keys
+ * become the model list at the driver, keyless by design) when the entry is
+ * the synthesized loopback connection. A user-owned entry under the same id
+ * keeps the plain proxy shape, so claiming the id never silently reroutes.
+ *
+ * Pure; exported for unit tests.
  */
-const resolveInstanceBackend = (
+export const resolveInstanceBackend = (
   entry: ProviderInstanceConfig,
   connections: ModelBackendConnections | undefined,
   credentials: ModelCredentials | undefined,
@@ -166,6 +176,19 @@ const resolveInstanceBackend = (
     credentialValue !== MODEL_CREDENTIAL_VALUE_REDACTED
       ? credentialValue
       : undefined;
+  if (
+    String(connectionId) === String(T3_ROUTER_CONNECTION_ID) &&
+    apiKey === undefined &&
+    connection.apiKeyEnv === undefined &&
+    connection.models === undefined
+  ) {
+    return {
+      kind: "t3-router",
+      baseUrl: connection.baseUrl,
+      ...(connection.displayName === undefined ? {} : { displayName: connection.displayName }),
+      ...(connection.protocols === undefined ? {} : { protocols: connection.protocols }),
+    };
+  }
   return {
     kind: "openai-compatible",
     baseUrl: connection.baseUrl,
@@ -174,6 +197,9 @@ const resolveInstanceBackend = (
     ...(connection.displayName === undefined ? {} : { displayName: connection.displayName }),
     ...(connection.protocols === undefined ? {} : { protocols: connection.protocols }),
     ...(connection.models === undefined ? {} : { models: connection.models }),
+    ...(connection.codexAccountInstanceId === undefined
+      ? {}
+      : { codexAccountInstanceId: connection.codexAccountInstanceId }),
   };
 };
 
@@ -245,6 +271,18 @@ const buildEntry = <R>(input: {
     yield* Scope.addFinalizer(parentScope, Scope.close(childScope, Exit.void).pipe(Effect.ignore));
 
     const backend = resolveInstanceBackend(entry, connections, credentials);
+    // Dangling references still resolve to native (deleting a connection must
+    // never break referencing instances), but the fallback is now observed
+    // instead of silent — a missing `t3-router` entry means the harness talks
+    // to the vendor directly, with different cost and capability.
+    const orphanConnectionId = orphanBackendConnectionId(entry, connections);
+    if (orphanConnectionId !== undefined) {
+      yield* Effect.logWarning("Provider instance falls back to native backend", {
+        instanceId: rawInstanceId,
+        driver: entry.driver,
+        connectionId: orphanConnectionId,
+      });
+    }
     const createResult = yield* driver
       .create({
         instanceId,
@@ -254,6 +292,7 @@ const buildEntry = <R>(input: {
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
         ...(backend === undefined ? {} : { backend }),
+        ...(orphanConnectionId === undefined ? {} : { nativeFallback: true as const }),
       })
       .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
     if (createResult._tag === "Failure") {

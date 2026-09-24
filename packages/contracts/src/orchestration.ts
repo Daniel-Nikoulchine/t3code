@@ -171,9 +171,6 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
-export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
-export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const ProviderRequestKind = Schema.Literals([
   "command",
   "file-read",
@@ -548,27 +545,6 @@ export const OrchestrationMessage = Schema.Struct({
 });
 export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
-export const OrchestrationProposedPlanId = TrimmedNonEmptyString;
-export type OrchestrationProposedPlanId = typeof OrchestrationProposedPlanId.Type;
-
-export const OrchestrationProposedPlan = Schema.Struct({
-  id: OrchestrationProposedPlanId,
-  turnId: Schema.NullOr(TurnId),
-  planMarkdown: TrimmedNonEmptyString,
-  implementedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  implementationThreadId: Schema.NullOr(ThreadId).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-});
-export type OrchestrationProposedPlan = typeof OrchestrationProposedPlan.Type;
-
-const SourceProposedPlanReference = Schema.Struct({
-  threadId: ThreadId,
-  planId: OrchestrationProposedPlanId,
-});
-
 export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
   "starting",
@@ -649,7 +625,6 @@ export const OrchestrationLatestTurn = Schema.Struct({
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
   assistantMessageId: Schema.NullOr(MessageId),
-  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
@@ -764,9 +739,6 @@ export const OrchestrationThread = Schema.Struct({
   // Null clears a previously set combo (back to manual ModelSelection).
   combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -811,9 +783,6 @@ export const OrchestrationThread = Schema.Struct({
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   deletedAt: Schema.NullOr(IsoDateTime),
   messages: Schema.Array(OrchestrationMessage),
-  proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
@@ -853,9 +822,6 @@ export const OrchestrationThreadShell = Schema.Struct({
   // See OrchestrationThread.combo: absent on pre-combo servers, null clears.
   combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -884,7 +850,6 @@ export const OrchestrationThreadShell = Schema.Struct({
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
-  hasActionableProposedPlan: Schema.Boolean,
   /**
    * Native background work alive after the turn settles: "working" while
    * subagents/workflows run, "monitoring" when watch loops are the only
@@ -1089,9 +1054,6 @@ const ThreadCreateCommand = Schema.Struct({
   // Absent = no fallback; null clears (accepted for symmetry with meta.update).
   combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1240,20 +1202,11 @@ const ThreadRuntimeModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadInteractionModeSetCommand = Schema.Struct({
-  type: Schema.Literal("thread.interaction-mode.set"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  interactionMode: ProviderInteractionMode,
-  createdAt: IsoDateTime,
-});
-
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1288,11 +1241,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
-  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
 
@@ -1310,9 +1259,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
-  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
 
@@ -1402,7 +1349,6 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
   ThreadRuntimeModeSetCommand,
-  ThreadInteractionModeSetCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1435,7 +1381,6 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadPullRequestLinkCommand,
   ThreadPullRequestUnlinkCommand,
   ThreadRuntimeModeSetCommand,
-  ThreadInteractionModeSetCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1503,14 +1448,6 @@ const ThreadMessageUserAppendCommand = Schema.Struct({
     attachments: Schema.Array(ChatAttachment),
     context: Schema.optional(OrchestrationMessageContext),
   }),
-  createdAt: IsoDateTime,
-});
-
-const ThreadProposedPlanUpsertCommand = Schema.Struct({
-  type: Schema.Literal("thread.proposed-plan.upsert"),
-  commandId: CommandId,
-  threadId: ThreadId,
-  proposedPlan: OrchestrationProposedPlan,
   createdAt: IsoDateTime,
 });
 
@@ -1604,7 +1541,6 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantCompleteCommand,
   ThreadHistoryImportCommand,
   ThreadMessageUserAppendCommand,
-  ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
@@ -1642,7 +1578,6 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.pull-request-unlinked",
   "thread.pull-request-synced",
   "thread.runtime-mode-set",
-  "thread.interaction-mode-set",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1652,7 +1587,6 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.reverted",
   "thread.session-stop-requested",
   "thread.session-set",
-  "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
 ]);
@@ -1703,9 +1637,6 @@ export const ThreadCreatedPayload = Schema.Struct({
   // Absent on pre-combo events; null clears (see OrchestrationThread.combo).
   combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1832,14 +1763,6 @@ export const ThreadRuntimeModeSetPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
-export const ThreadInteractionModeSetPayload = Schema.Struct({
-  threadId: ThreadId,
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
-  updatedAt: IsoDateTime,
-});
-
 export const ThreadMessageSentPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -1859,10 +1782,6 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
-  ),
-  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
 
@@ -1907,11 +1826,6 @@ export const ThreadSessionStopRequestedPayload = Schema.Struct({
 export const ThreadSessionSetPayload = Schema.Struct({
   threadId: ThreadId,
   session: OrchestrationSession,
-});
-
-export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
-  threadId: ThreadId,
-  proposedPlan: OrchestrationProposedPlan,
 });
 
 export const ThreadTurnDiffCompletedPayload = Schema.Struct({
@@ -2069,11 +1983,6 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.interaction-mode-set"),
-    payload: ThreadInteractionModeSetPayload,
-  }),
-  Schema.Struct({
-    ...EventBaseFields,
     type: Schema.Literal("thread.message-sent"),
     payload: ThreadMessageSentPayload,
   }),
@@ -2116,11 +2025,6 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-set"),
     payload: ThreadSessionSetPayload,
-  }),
-  Schema.Struct({
-    ...EventBaseFields,
-    type: Schema.Literal("thread.proposed-plan-upserted"),
-    payload: ThreadProposedPlanUpsertedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

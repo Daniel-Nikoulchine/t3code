@@ -32,29 +32,16 @@ const settingsState = vi.hoisted(() => ({
   updateClientSettings: vi.fn(),
 }));
 
-const settingsSearchState = vi.hoisted(() => ({
-  targetId: null as string | null,
-  effects: [] as Array<() => void>,
-}));
-
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   const { reactHookHarness } = await import("../../test/reactHookHarness");
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
-    useEffect: (effect: () => void) => settingsSearchState.effects.push(effect),
+    useEffect: () => undefined,
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
-  };
-});
-
-vi.mock("./settingsLayout", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./settingsLayout")>();
-  return {
-    ...actual,
-    useSettingsSearchTargetId: () => settingsSearchState.targetId,
   };
 });
 
@@ -177,8 +164,6 @@ describe("EnvironmentProviderSettings routing", () => {
     settingsState.updateEnvironmentIds = [];
     settingsState.updateSettings.mockReset();
     settingsState.updateClientSettings.mockReset();
-    settingsSearchState.targetId = null;
-    settingsSearchState.effects = [];
     commands.refresh.mockReset().mockResolvedValue({ _tag: "Success" });
     commands.updateProvider.mockReset().mockResolvedValue({ _tag: "Success" });
   });
@@ -273,9 +258,6 @@ describe("EnvironmentProviderSettings routing", () => {
     atoms.providers = [provider()];
     let panel = renderPanel({ readOnly: true });
 
-    const inertWrapper = visitElements(panel, (element) => element.props.inert === true);
-    expect(inertWrapper).not.toBeNull();
-
     const customRow = visitElements(
       panel,
       (element) => element.props.instanceId === customId && element.props.mode === "list",
@@ -290,6 +272,10 @@ describe("EnvironmentProviderSettings routing", () => {
       (element) => element.props.instanceId === customId && element.props.mode === "editor",
     );
     expect(customEditor).not.toBeNull();
+    // The tab owns no write controls of its own any more (provider-side
+    // settings live on the Providers tab); every write goes through the card,
+    // which freezes itself when the session cannot operate the environment.
+    expect(customEditor?.props.readOnly).toBe(true);
 
     const notice = visitElements(panel, (element) => element.props.title === "Limited permissions");
     expect(notice).not.toBeNull();
@@ -309,19 +295,12 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(visitElements(panel, isAddProviderButton)).not.toBeNull();
   });
 
-  it("keeps Advanced visible when search targets the provider health interval", () => {
-    let panel = renderPanel();
-    expect(visitElements(panel, (element) => element.props.title === "Advanced")).not.toBeNull();
+  it("hides the provider-side Advanced section: this tab is harness settings only", () => {
+    const panel = renderPanel();
+    expect(visitElements(panel, (element) => element.props.title === "Advanced")).toBeNull();
     expect(
       visitElements(panel, (element) => element.props.id === "provider-health-check-interval"),
-    ).not.toBeNull();
-
-    settingsSearchState.targetId = "provider-health-check-interval";
-    panel = renderPanel();
-    expect(visitElements(panel, (element) => element.props.title === "Advanced")).not.toBeNull();
-    expect(
-      visitElements(panel, (element) => element.props.id === "provider-health-check-interval"),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   it("deletes and resets provider configuration without erasing shared preferences", () => {

@@ -65,8 +65,8 @@ const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 
 const CODEX_PRESENTATION = {
   displayName: "Codex",
-  showInteractionModeToggle: true,
   reportsContextWindow: true,
+  setup: { canAuthenticate: true, canInstall: false },
 } as const;
 
 export interface CodexAppServerProviderSnapshot {

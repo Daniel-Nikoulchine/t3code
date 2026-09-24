@@ -47,8 +47,7 @@ T3 Code maps permission modes as follows:
 | Auto-accept edits | `accept-edits` |
 | Full access       | `dangerous`    |
 
-Approval buttons use the choices returned by Devin. Automatic approval prefers the session-scoped
-choice and never silently creates a permanent grant.
+Approval buttons use the choices returned by Devin (see [Permissions](./providers.md#permissions)).
 
 Plain-text messages sent while Devin is working redirect the active turn. Images are sent through
 Devin's ACP image support. Devin slash commands advertised by the running CLI appear in the

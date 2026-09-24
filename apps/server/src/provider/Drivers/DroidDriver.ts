@@ -19,27 +19,20 @@ import {
   enrichDroidSnapshot,
 } from "../Layers/DroidProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
+import { resolveHarnessProcessEnv } from "../harnessMaterial.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
+  resolveDriverMaintenance,
   makeManualOnlyProviderMaintenanceCapabilities,
   makeProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 import { probeDroidSkills } from "./DroidSkills.ts";
 const decodeDroidSettings = Schema.decodeSync(DroidSettings);
 
@@ -84,7 +77,16 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
   },
   configSchema: DroidSettings,
   defaultConfig: (): DroidSettings => decodeDroidSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -93,10 +95,11 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = {
-        ...mergeProviderInstanceEnvironment(environment),
-        ...resolveModelBackendEnvironment(backend, process.env),
-      };
+      const processEnv = resolveHarnessProcessEnv({
+        environment,
+        backend,
+        baseEnv: process.env,
+      }).processEnv;
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -107,19 +110,15 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
-        ...(backend === undefined ? {} : { backend }),
+        backend,
+        nativeFallback,
       });
       const effectiveConfig = { ...config, enabled } satisfies DroidSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, pathService),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makeDroidAdapter(effectiveConfig, {
         environment: processEnv,
@@ -134,38 +133,19 @@ export const DroidDriver: ProviderDriver<DroidSettings, DroidDriverEnv> = {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<DroidSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "the Droid provider snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance,
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialDroidProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialDroidProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
-              enrichDroidSnapshot({
-                snapshot: currentSnapshot,
-                maintenanceCapabilities,
-                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                publishSnapshot,
-                httpClient,
-              }),
-            ),
-          ),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build the Droid provider snapshot.",
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichDroidSnapshot,
+        httpClient,
+      });
 
       return {
         instanceId,

@@ -1,12 +1,11 @@
-import { ProviderInstanceId } from "@t3tools/contracts";
+import { PROVIDER_DISPLAY_NAMES, ProviderInstanceId } from "@t3tools/contracts";
 import type {
-  ModelBackendConnectionId,
   ModelCapabilities,
   ModelSelection,
   ServerConfig as T3ServerConfig,
   ServerProvider,
 } from "@t3tools/contracts";
-import { deriveModelCatalog } from "@t3tools/client-runtime/model-catalog";
+import { resolveModelCatalog } from "@t3tools/client-runtime/model-catalog";
 import { resolveProviderBackendLabel } from "@t3tools/client-runtime/state/provider-instance-display";
 import {
   buildExplicitProviderOptionSelectionsFromDescriptors,
@@ -56,15 +55,13 @@ function providerDisplayLabel(provider: {
   readonly instanceId: string;
 }): string {
   if (provider.displayName) return provider.displayName;
-  if (provider.driver === "codex") return "Codex";
-  if (provider.driver === "claudeAgent") return "Claude";
-  if (provider.driver === "droid") return "Droid";
-  if (provider.driver === "hermes") return "Hermes";
-  if (provider.driver === "cline") return "Cline";
-  if (provider.driver === "kilo") return "Kilo";
-  if (provider.driver === "pi") return "Pi";
-  if (provider.driver === "deepseek") return "DeepSeek";
-  return provider.instanceId;
+  // Contracts owns the canonical driver labels — never hand-maintain a
+  // second list here (it drifted to 9 of 18 drivers before). Unknown fork
+  // drivers fall back to the instance id.
+  return (
+    PROVIDER_DISPLAY_NAMES[provider.driver as keyof typeof PROVIDER_DISPLAY_NAMES] ??
+    provider.instanceId
+  );
 }
 
 /**
@@ -307,19 +304,6 @@ export function groupByLogicalModel(
   }));
 }
 
-/** Per-instance link into the connections map, mirrored from `settings.providerInstances`. */
-function instanceConnectionMap(
-  config: T3ServerConfig | null | undefined,
-): Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> {
-  const out: Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> = {};
-  for (const [instanceId, instance] of Object.entries(config?.settings?.providerInstances ?? {})) {
-    if (instance.connectionId) {
-      out[ProviderInstanceId.make(instanceId)] = instance.connectionId;
-    }
-  }
-  return out;
-}
-
 /**
  * Concrete pairings a model backend connection serves through its linked
  * instance. Snapshots list only an instance's own models, so these pairings
@@ -333,10 +317,11 @@ export function buildConnectionModelOptions(
   if (!config) {
     return [];
   }
-  const catalog = deriveModelCatalog({
+  const catalog = resolveModelCatalog({
     providers: config.providers,
     connections: config.settings?.modelBackendConnections ?? {},
-    instanceConnections: instanceConnectionMap(config),
+    providerInstances: config.settings?.providerInstances,
+    routes: config.settings?.modelRouterRoutes,
   });
   const options: ModelOption[] = [];
   for (const logical of catalog) {
@@ -362,7 +347,7 @@ export function buildConnectionModelOptions(
       options.push({
         key: `${source.instanceId}:${source.model}`,
         label: logical.displayName,
-        subtitle: "",
+        subtitle: source.subProvider ?? "",
         providerKey: source.instanceId,
         providerLabel: providerDisplayLabel({
           driver: providerDriver,

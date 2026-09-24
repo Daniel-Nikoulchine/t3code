@@ -89,6 +89,21 @@ const PROVIDER = ProviderDriverKind.make("codex");
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  /**
+   * Hybrid serving: when the instance is wired to an API connection with
+   * declared models, connection slugs run in the wired home
+   * (`codexConfig.homePath`) while everything else runs on the own login in
+   * `nativeHomePath` with `nativeEnvironment` (no backend overlay — an
+   * `OPENAI_BASE_URL` leak would send "native" turns to the endpoint
+   * anyway). Absent means one home and env for every model (legacy).
+   */
+  readonly hybridBackend?:
+    | {
+        readonly nativeHomePath: string;
+        readonly nativeEnvironment: NodeJS.ProcessEnv;
+        readonly isConnectionModel: (model: string | undefined) => boolean;
+      }
+    | undefined;
   readonly makeRuntime?: (
     options: CodexSessionRuntimeOptions,
   ) => Effect.Effect<
@@ -106,6 +121,13 @@ interface CodexAdapterSessionContext {
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
   readonly turnTokenUsage: CodexTurnTokenUsageState;
+  /**
+   * Which home this session runs in: the connection side pins the wired
+   * home, the native side the own-login home, null when hybrid is off. A
+   * turn requesting the other side fails with a start-a-new-thread hint
+   * instead of silently serving from the wrong account.
+   */
+  readonly backend: "native" | "connection" | null;
   stopped: boolean;
 }
 
@@ -2255,14 +2277,44 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        // Hybrid instances pick home and env per session from the session's
+        // model: connection slugs run wired, everything else on the own
+        // login (whose env must not carry the backend overlay — a leaked
+        // OPENAI_BASE_URL would send "native" turns to the endpoint anyway).
+        // A model-less start keeps the wired home (legacy default).
+        const requestedModel =
+          input.modelSelection?.instanceId === boundInstanceId
+            ? input.modelSelection.model
+            : undefined;
+        const hybrid = options?.hybridBackend;
+        const useConnectionHome =
+          hybrid !== undefined &&
+          requestedModel !== undefined &&
+          hybrid.isConnectionModel(requestedModel);
+        const sessionHomePath =
+          hybrid === undefined
+            ? codexConfig.homePath
+            : useConnectionHome
+              ? codexConfig.homePath
+              : hybrid.nativeHomePath;
+        const sessionBaseEnvironment =
+          hybrid === undefined || useConnectionHome
+            ? options?.environment
+            : hybrid.nativeEnvironment;
+        const sessionBackend =
+          hybrid === undefined || requestedModel === undefined
+            ? null
+            : useConnectionHome
+              ? ("connection" as const)
+              : ("native" as const);
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
-          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, options?.environment),
-          ...(options?.environment ? { environment: options.environment } : {}),
-          ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+          launchArgs: resolveCodexLaunchArgs(codexConfig.launchArgs, sessionBaseEnvironment),
+          ...(sessionBaseEnvironment ? { environment: sessionBaseEnvironment } : {}),
+          ...(sessionHomePath ? { homePath: sessionHomePath } : {}),
           ...(isCodexResumeCursorSchema(input.resumeCursor)
             ? { resumeCursor: input.resumeCursor }
             : {}),
@@ -2275,7 +2327,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? {
                 environment: {
                   ...McpProviderSession.withAgentDeviceEnvironment(
-                    options?.environment ?? process.env,
+                    sessionBaseEnvironment ?? process.env,
                     mcpSession,
                   ),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
@@ -2468,6 +2520,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           runtime,
           eventFiber,
           turnTokenUsage,
+          backend: sessionBackend,
           stopped: false,
         });
         sessionScopeTransferred = true;
@@ -2519,6 +2572,24 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
     const session = yield* requireSession(input.threadId);
+    // A hybrid session is pinned to the home it started in. A turn asking
+    // for the other side would silently bill the wrong account, so it fails
+    // with a start-a-new-thread hint instead.
+    const turnModel =
+      input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection.model : undefined;
+    const turnHybrid = options?.hybridBackend;
+    if (session.backend !== null && turnHybrid !== undefined && turnModel !== undefined) {
+      const turnConnection = turnHybrid.isConnectionModel(turnModel);
+      if ((session.backend === "connection") !== turnConnection) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "sendTurn",
+          issue: turnConnection
+            ? `Model '${turnModel}' runs on this instance's API connection, but this thread started on its own login. Start a new thread to switch.`
+            : `Model '${turnModel}' runs on this instance's own login, but this thread started on its API connection. Start a new thread to switch.`,
+        });
+      }
+    }
     const reasoningEffort =
       input.modelSelection?.instanceId === boundInstanceId
         ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
@@ -2539,7 +2610,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             }
           : {}),
         ...(serviceTier ? { serviceTier } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
       .pipe(Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)));

@@ -3,7 +3,6 @@ import type {
   ModelBackendConnectionId,
   ModelCredential,
   ModelCredentialId,
-  ModelProxyProtocol,
   ProviderInstanceConfig,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -21,8 +20,6 @@ const MODEL_CREDENTIAL_ID_MAX_CHARS = 64;
 // Same slug rules as `ModelBackendConnectionId` / `ModelCredentialId` in
 // contracts: user-chosen keys, letter first, letters/digits/`-`/`_` after.
 const MODEL_CREDENTIAL_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
-
-export const BOTH_PROTOCOLS: ReadonlyArray<ModelProxyProtocol> = ["openai", "anthropic"];
 
 /**
  * Credential vendor presets for the add form. Each preset also names the

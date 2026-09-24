@@ -46,8 +46,7 @@ T3 Code maps permission modes as follows:
 | Auto-accept edits | `accept_edits` |
 | Full access       | `dont_ask`     |
 
-Approval buttons use the choices returned by Hermes. Automatic approval prefers the session-scoped
-choice and never silently creates a permanent grant.
+Approval buttons use the choices returned by Hermes (see [Permissions](./providers.md#permissions)).
 
 Plain-text messages sent while Hermes is working redirect the active turn. Images are sent through
 Hermes' ACP image support. Hermes slash commands advertised by the running CLI appear in the

@@ -21,7 +21,6 @@
 import {
   ApprovalRequestId,
   type CanonicalRequestType,
-  EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -35,7 +34,6 @@ import {
   type ZcodeSettings,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -45,9 +43,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
@@ -57,6 +53,11 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import {
+  makeEventStamper,
+  makeThreadLockRegistry,
+  requireScaffoldSession,
+} from "../acp/AcpAdapterScaffold.ts";
 import { type ZcodeAdapterShape } from "../Services/ZcodeAdapter.ts";
 import {
   defaultZcodePermissionOptionId,
@@ -152,14 +153,10 @@ export function resolveZcodeModelRef(model: string): { providerId: string; model
   return { providerId: "zai", modelId: trimmed };
 }
 
-/** Map T3 runtime/interaction modes onto ZCode session modes. */
+/** Map T3 runtime mode onto ZCode session modes. */
 export function resolveZcodeMode(input: {
   readonly runtimeMode: ProviderSession["runtimeMode"];
-  readonly interactionMode?: "default" | "plan" | undefined;
 }): string {
-  if (input.interactionMode === "plan") {
-    return "plan";
-  }
   switch (input.runtimeMode) {
     case "full-access":
       return "yolo";
@@ -372,7 +369,6 @@ export const makeZcodeAdapter = Effect.fn("makeZcodeAdapter")(function* (
   const crypto = yield* Crypto.Crypto;
 
   const sessions = new Map<ThreadId, ZcodeSessionContext>();
-  const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const requestedTimeoutMs = options?.turnTimeoutMs;
   const turnTimeoutMs =
@@ -380,50 +376,20 @@ export const makeZcodeAdapter = Effect.fn("makeZcodeAdapter")(function* (
       ? Math.max(1, Math.floor(requestedTimeoutMs))
       : DEFAULT_ZCODE_TURN_TIMEOUT_MS;
 
-  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-  const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-    Effect.mapError(
-      (cause) =>
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "crypto/randomUUIDv4",
-          detail: "Failed to generate ZCode runtime identifier.",
-          cause,
-        }),
-    ),
-  );
-  const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
-  const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
+  const locks = yield* makeThreadLockRegistry;
+  const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+    locks.withThreadLock(threadId, effect);
+  const stamper = yield* makeEventStamper({
+    provider: PROVIDER,
+    detail: "Failed to generate ZCode runtime identifier.",
+  });
+  const nowIso = stamper.nowIso;
+  const randomUUIDv4 = stamper.randomUUIDv4;
+  const makeEventStamp = stamper.makeEventStamp;
   const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
     PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
 
-  const getThreadSemaphore = (threadId: string) =>
-    SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-      const existing = current.get(threadId);
-      if (existing) {
-        return Effect.succeed([existing, current] as const);
-      }
-      return Semaphore.make(1).pipe(
-        Effect.map((semaphore) => {
-          const next = new Map(current);
-          next.set(threadId, semaphore);
-          return [semaphore, next] as const;
-        }),
-      );
-    });
-
-  const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
-
-  const requireSession = (
-    threadId: ThreadId,
-  ): Effect.Effect<ZcodeSessionContext, ProviderAdapterSessionNotFoundError> => {
-    const ctx = sessions.get(threadId);
-    if (!ctx || ctx.stopped) {
-      return Effect.fail(new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }));
-    }
-    return Effect.succeed(ctx);
-  };
+  const requireSession = requireScaffoldSession(sessions, PROVIDER);
 
   const settlePendingApprovalsAsCancelled = (ctx: ZcodeSessionContext) =>
     Effect.forEach(
@@ -654,7 +620,6 @@ export const makeZcodeAdapter = Effect.fn("makeZcodeAdapter")(function* (
           const resumeSessionId = parseZcodeResume(input.resumeCursor)?.sessionId;
           const mode = resolveZcodeMode({
             runtimeMode: input.runtimeMode,
-            interactionMode: undefined,
           });
           const requestedModel = modelSelection?.model?.trim() || undefined;
 

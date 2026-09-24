@@ -423,23 +423,11 @@ export const ClientSettingsSchema = Schema.Struct({
     TrimmedNonEmptyString,
     PullRequestMergeMethod,
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  // Legacy plan mode. The composer's Build/Plan toggle was removed from the
-  // default UI; this beta flag restores it (plus the /plan and /default slash
-  // commands) for users who still rely on the old workflow.
-  planModeEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  // Legacy context window meter. The composer hides it by default; users who
-  // still want the old usage indicator can restore it from Settings.
-  contextWindowMeterEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   // Desktop resting composer: scrolling an existing thread's conversation
   // settles the composer into its single-line layout. Losing focus never does.
   composerCollapseOnScroll: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   proactivePanelsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   showSkillsInSlashMenu: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  // Legacy sidebar (the original per-project tree). Deliberately a fresh key
-  // (was `sidebarV2Enabled` + `sidebarV2ConfiguredByUser`): decoding drops the
-  // old keys, so everyone, including prior beta opt-outs, resets to the new
-  // default sidebar.
-  legacySidebarEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -923,6 +911,32 @@ export const KiloSettings = makeProviderSettingsSchema(
 );
 export type KiloSettings = typeof KiloSettings.Type;
 
+export const MinimaxSettings = makeProviderSettingsSchema(
+  {
+    // Off by default (like Cursor/Grok/Kilo): users opt in from Settings
+    // after running `mcode login`.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("mcode").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the MiniMax Code CLI binary (`mcode` from @minimax-ai/code).",
+        providerSettingsForm: { placeholder: "mcode", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type MinimaxSettings = typeof MinimaxSettings.Type;
+
 export const PiSettings = makeProviderSettingsSchema(
   {
     // Off by default (like Cursor/Grok/Hermes/OpenCode): users opt in from
@@ -1273,6 +1287,42 @@ export const OpenClawSettings = makeProviderSettingsSchema(
 export type OpenClawSettings = typeof OpenClawSettings.Type;
 
 /**
+ * Freebuff free mode: network-direct against codebuff.com. Auth is a bearer
+ * token — either this override or the Freebuff CLI's own
+ * `~/.config/manicode/credentials.json` (`default.authToken`). Session
+ * admission plus OpenAI-compatible chat completions; no local binary.
+ */
+export const FreebuffSettings = makeProviderSettingsSchema(
+  {
+    // Off by default: free-mode admission can consume the account's single
+    // free session slot, so users opt in from Settings.
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    authToken: TrimmedString.pipe(
+      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.annotateKey({
+        title: "Auth token",
+        description:
+          "Freebuff/Codebuff API token. Leave blank to use the Freebuff CLI credentials at ~/.config/manicode/credentials.json.",
+        providerSettingsForm: {
+          control: "password",
+          placeholder: "credentials.json default",
+          clearWhenEmpty: "omit",
+        },
+      }),
+    ),
+    customModels: Schema.Array(CustomModelSetting).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  { order: ["authToken"] },
+);
+export type FreebuffSettings = typeof FreebuffSettings.Type;
+
+/**
  * A read-only quota source outside this environment's provider CLIs. The
  * only kind today is a CLIProxyAPI hub, whose management API reports the
  * windows of every pooled account. The key travels in settings for now, like
@@ -1363,10 +1413,21 @@ export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
  * How assistant text reaches clients while a turn runs.
  * - `turn`: hold the whole message until the turn finishes or pauses.
  * - `paragraph`: deliver each finished paragraph or closed code block.
- * - `token`: forward every provider delta. Legacy, kept for compatibility.
  */
-export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph", "token"]);
+export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph"]);
 export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
+
+// Compat: stored settings may still contain "token" (removed); decode maps it
+// to "paragraph" so old files keep working without resetting the key.
+const ResponseStreamingModeFromStorage = Schema.Literals(["turn", "paragraph", "token"]).pipe(
+  Schema.decodeTo(
+    ResponseStreamingMode,
+    SchemaTransformation.transform({
+      decode: (mode): ResponseStreamingMode => (mode === "token" ? "paragraph" : mode),
+      encode: (mode) => mode,
+    }),
+  ),
+);
 
 export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultModelSelection",
@@ -1409,7 +1470,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
-  responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
+  responseStreamingMode: Schema.optionalKey(ResponseStreamingModeFromStorage),
 } satisfies Record<ProjectScopedServerSettingKey, unknown>);
 export type ProjectSettingsOverrides = typeof ProjectSettingsOverrides.Type;
 
@@ -1418,7 +1479,7 @@ export const ServerSettings = Schema.Struct({
   // key (was `enableLegacyTokenStreaming`, before that
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
   // including prior token-streaming opt-ins, resets to the paragraph default.
-  responseStreamingMode: ResponseStreamingMode.pipe(
+  responseStreamingMode: ResponseStreamingModeFromStorage.pipe(
     Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -1584,11 +1645,13 @@ export const ServerSettings = Schema.Struct({
     hermes: HermesSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     cline: ClineSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     kilo: KiloSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    minimax: MinimaxSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     omp: OmpSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     zcode: ZcodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     antigravity: AntigravitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     openclaw: OpenClawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    freebuff: FreebuffSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     pi: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
@@ -1808,6 +1871,12 @@ const KiloSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const MinimaxSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 const ZcodeSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
@@ -1864,9 +1933,15 @@ const OpenClawSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const FreebuffSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  authToken: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(CustomModelSetting)),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
-  responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
+  responseStreamingMode: Schema.optionalKey(ResponseStreamingModeFromStorage),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
@@ -1943,12 +2018,14 @@ export const ServerSettingsPatch = Schema.Struct({
       hermes: Schema.optionalKey(HermesSettingsPatch),
       cline: Schema.optionalKey(ClineSettingsPatch),
       kilo: Schema.optionalKey(KiloSettingsPatch),
+      minimax: Schema.optionalKey(MinimaxSettingsPatch),
       omp: Schema.optionalKey(OmpSettingsPatch),
       zcode: Schema.optionalKey(ZcodeSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
       antigravity: Schema.optionalKey(AntigravitySettingsPatch),
       openclaw: Schema.optionalKey(OpenClawSettingsPatch),
       pi: Schema.optionalKey(PiSettingsPatch),
+      freebuff: Schema.optionalKey(FreebuffSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual
@@ -2044,12 +2121,9 @@ export const ClientSettingsPatch = Schema.Struct({
   pullRequestMergeMethodOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, PullRequestMergeMethod),
   ),
-  planModeEnabled: Schema.optionalKey(Schema.Boolean),
-  contextWindowMeterEnabled: Schema.optionalKey(Schema.Boolean),
   composerCollapseOnScroll: Schema.optionalKey(Schema.Boolean),
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
-  legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

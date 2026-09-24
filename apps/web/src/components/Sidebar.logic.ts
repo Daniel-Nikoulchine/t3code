@@ -13,6 +13,7 @@ import {
   effectiveSnoozed,
   type ThreadSnoozeShell,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { resolveThreadStatusKind } from "@t3tools/client-runtime/state/thread-status";
 import {
   getThreadSortTimestamp,
   resolveSettledThreadTimestamp,
@@ -23,7 +24,6 @@ import {
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
-import { isLatestTurnSettled } from "../session-logic";
 
 export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
@@ -513,35 +513,26 @@ export interface ThreadStatusPill {
     | "Connecting"
     | "Completed"
     | "Pending Approval"
-    | "Awaiting Input"
-    | "Plan Ready";
+    | "Awaiting Input";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
 }
 
 // Rollup order mirrors the per-thread resolver exactly: attention states,
-// then active work, then the actionable plan prompt, then passive
-// monitoring. A Monitoring sibling must never hide a Plan Ready thread.
+// then active work, then passive monitoring.
 const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Pending Approval": 6,
   "Awaiting Input": 5,
   Working: 4,
   Connecting: 4,
-  "Plan Ready": 3,
   Monitoring: 2,
   Completed: 1,
 };
 
 type ThreadStatusInput = Pick<
   SidebarThreadSummary,
-  | "hasActionableProposedPlan"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "interactionMode"
-  | "latestTurn"
-  | "session"
-  | "backgroundLiveness"
+  "hasPendingApprovals" | "hasPendingUserInput" | "latestTurn" | "session" | "backgroundLiveness"
 > & {
   lastVisitedAt?: string | undefined;
 };
@@ -837,29 +828,11 @@ type SidebarThreadStatusInput = Pick<
 >;
 
 export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
-  if (thread.hasPendingApprovals) {
-    return "approval";
-  }
-  if (thread.hasPendingUserInput) {
-    return "input";
-  }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
-    return "working";
-  }
-  // A failed session outranks lingering background liveness: the user must
-  // see the failure, not a stale Working (review finding).
-  if (thread.session?.status === "error") {
-    return "failed";
-  }
-  // Background work outlives the turn: fleets read as working; monitoring
-  // only when watch loops are the sole live work.
-  if (thread.backgroundLiveness === "working") {
-    return "working";
-  }
-  if (thread.backgroundLiveness === "monitoring") {
-    return "monitoring";
-  }
-  return "ready";
+  const kind = resolveThreadStatusKind(thread);
+  // The sidebar collapses starting into working; the connecting split lives
+  // on in the pill and mobile adapters behind the same shared decision.
+  if (kind === "connecting") return "working";
+  return kind;
 }
 
 /** First VALID timestamp wins: `a ?? b` falls through on null, but a present-
@@ -986,79 +959,49 @@ export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {
   const { thread } = input;
-
-  if (thread.hasPendingApprovals) {
-    return {
-      label: "Pending Approval",
-      colorClass: "text-amber-600 dark:text-amber-300/90",
-      dotClass: "bg-amber-500 dark:bg-amber-300/90",
-      pulse: false,
-    };
-  }
-
-  if (thread.hasPendingUserInput) {
-    return {
-      label: "Awaiting Input",
-      colorClass: "text-indigo-600 dark:text-indigo-300/90",
-      dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
-      pulse: false,
-    };
-  }
-
-  if (thread.session?.status === "running") {
-    return {
-      label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  if (thread.session?.status === "starting") {
-    return {
-      label: "Connecting",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  // An actionable plan prompt outranks lingering background work: it needs
-  // the user's decision, while liveness merely reports (review finding).
-  const hasPlanReadyPrompt =
-    !thread.hasPendingUserInput &&
-    thread.interactionMode === "plan" &&
-    isLatestTurnSettled(thread.latestTurn, thread.session) &&
-    thread.hasActionableProposedPlan;
-  if (hasPlanReadyPrompt) {
-    return {
-      label: "Plan Ready",
-      colorClass: "text-violet-600 dark:text-violet-300/90",
-      dotClass: "bg-violet-500 dark:bg-violet-300/90",
-      pulse: false,
-    };
-  }
-
-  // The turn can settle while native background work runs on. Subagent and
-  // workflow fleets read as plain Working; Monitoring is reserved for watch
-  // loops (a parent agent babysitting a PR, tailing checks) with no other
-  // live work. Same recede treatment as Working per inbox-zero.
-  if (thread.backgroundLiveness === "working") {
-    return {
-      label: "Working",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: true,
-    };
-  }
-
-  if (thread.backgroundLiveness === "monitoring") {
-    return {
-      label: "Monitoring",
-      colorClass: "text-sky-600 dark:text-sky-300/80",
-      dotClass: "bg-sky-500 dark:bg-sky-300/80",
-      pulse: false,
-    };
+  // Shared decision; this adapter only owns pill presentation. Failures have
+  // no pill label and fall through to Completed-or-null below, as before.
+  switch (resolveThreadStatusKind(thread)) {
+    case "approval":
+      return {
+        label: "Pending Approval",
+        colorClass: "text-amber-600 dark:text-amber-300/90",
+        dotClass: "bg-amber-500 dark:bg-amber-300/90",
+        pulse: false,
+      };
+    case "input":
+      return {
+        label: "Awaiting Input",
+        colorClass: "text-indigo-600 dark:text-indigo-300/90",
+        dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+        pulse: false,
+      };
+    case "working":
+      // Covers session running and background working: the turn can settle
+      // while native subagent/workflow fleets run on.
+      return {
+        label: "Working",
+        colorClass: "text-sky-600 dark:text-sky-300/80",
+        dotClass: "bg-sky-500 dark:bg-sky-300/80",
+        pulse: true,
+      };
+    case "connecting":
+      return {
+        label: "Connecting",
+        colorClass: "text-sky-600 dark:text-sky-300/80",
+        dotClass: "bg-sky-500 dark:bg-sky-300/80",
+        pulse: true,
+      };
+    case "monitoring":
+      return {
+        label: "Monitoring",
+        colorClass: "text-sky-600 dark:text-sky-300/80",
+        dotClass: "bg-sky-500 dark:bg-sky-300/80",
+        pulse: false,
+      };
+    case "failed":
+    case "ready":
+      break;
   }
 
   if (hasUnseenCompletion(thread)) {

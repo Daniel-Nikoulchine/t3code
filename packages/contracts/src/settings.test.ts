@@ -9,6 +9,7 @@ import {
   ClientSettingsPatch,
   ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
+  ProjectSettingsOverrides,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -21,6 +22,7 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeProjectSettingsOverrides = Schema.decodeUnknownSync(ProjectSettingsOverrides);
 
 describe("ServerSettings default permissions", () => {
   it("keeps full access for settings saved before a default was configured", () => {
@@ -586,16 +588,11 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to the current sidebar", () => {
-    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(false);
-  });
-
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
     const decoded = decodeClientSettings({
       sidebarV2Enabled: false,
       sidebarV2ConfiguredByUser: true,
     });
-    expect(decoded.legacySidebarEnabled).toBe(false);
     expect(decoded).not.toHaveProperty("sidebarV2Enabled");
     expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
   });
@@ -608,29 +605,16 @@ describe("ClientSettings sidebar", () => {
     expect(decodeClientSettingsPatch(stored)).toEqual({});
   });
 
-  it("preserves an explicit legacy sidebar opt-in", () => {
-    expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
-    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
-      true,
-    );
+  it("drops the retired legacy sidebar opt-in", () => {
+    const stored = { legacySidebarEnabled: true };
+    expect(decodeClientSettings(stored)).not.toHaveProperty("legacySidebarEnabled");
+    expect(decodeClientSettingsPatch(stored)).toEqual({});
   });
 
   it("keeps unpin confirmation opt-in and patchable", () => {
     expect(decodeClientSettings({}).confirmThreadUnpin).toBe(false);
     expect(decodeClientSettingsPatch({ confirmThreadUnpin: true }).confirmThreadUnpin).toBe(true);
     expect(() => decodeClientSettingsPatch({ confirmThreadUnpin: "yes" })).toThrow();
-  });
-});
-
-describe("ClientSettings context window meter", () => {
-  it("defaults off and preserves an explicit legacy opt-in", () => {
-    expect(decodeClientSettings({}).contextWindowMeterEnabled).toBe(false);
-    expect(
-      decodeClientSettings({ contextWindowMeterEnabled: true }).contextWindowMeterEnabled,
-    ).toBe(true);
-    expect(
-      decodeClientSettingsPatch({ contextWindowMeterEnabled: true }).contextWindowMeterEnabled,
-    ).toBe(true);
   });
 });
 
@@ -674,6 +658,35 @@ describe("ServerSettings thread settlement", () => {
   it.each([-1, 0, 91])("rejects an auto-settle threshold outside 1..90: %s", (value) => {
     expect(() => decodeServerSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
     expect(() => decodeServerSettingsPatch({ sidebarAutoSettleAfterDays: value })).toThrow();
+  });
+});
+
+describe("ServerSettings response streaming mode", () => {
+  it("defaults to paragraph and round-trips turn", () => {
+    expect(decodeServerSettings({}).responseStreamingMode).toBe("paragraph");
+    expect(decodeServerSettings({ responseStreamingMode: "turn" }).responseStreamingMode).toBe(
+      "turn",
+    );
+    expect(
+      encodeServerSettings(decodeServerSettings({ responseStreamingMode: "turn" })),
+    ).toMatchObject({ responseStreamingMode: "turn" });
+  });
+
+  it('maps the removed "token" mode to "paragraph" on decode', () => {
+    expect(decodeServerSettings({ responseStreamingMode: "token" }).responseStreamingMode).toBe(
+      "paragraph",
+    );
+    expect(
+      decodeServerSettingsPatch({ responseStreamingMode: "token" }).responseStreamingMode,
+    ).toBe("paragraph");
+    expect(
+      decodeProjectSettingsOverrides({ responseStreamingMode: "token" }).responseStreamingMode,
+    ).toBe("paragraph");
+    expect(
+      decodeServerSettings({
+        projectSettingsOverrides: { project: { responseStreamingMode: "token" } },
+      }).projectSettingsOverrides,
+    ).toMatchObject({ project: { responseStreamingMode: "paragraph" } });
   });
 });
 

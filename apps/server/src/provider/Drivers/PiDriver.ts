@@ -29,24 +29,19 @@ import {
   enrichPiSnapshot,
 } from "../Layers/PiProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
   makeProviderMaintenanceCapabilities,
   makeManualOnlyProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
+  resolveDriverMaintenance,
 } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 import { makePiContinuationGroupKey, makePiEnvironment } from "./PiHome.ts";
 import { probePiSkills } from "./PiSkills.ts";
+import { ensurePiBackendExtension, resolvePiBackendWiring } from "./PiBackend.ts";
 
 const decodePiSettings = Schema.decodeSync(PiSettings);
 
@@ -89,7 +84,16 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
   },
   configSchema: PiSettings,
   defaultConfig: (): PiSettings => decodePiSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -98,9 +102,62 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const { baseDir } = yield* ServerConfig;
+      // A linked model backend reaches Pi through a generated extension
+      // that registers a T3-owned `t3-backend` provider (Pi has no endpoint
+      // flag; custom providers come from extensions). Backend models ride
+      // the custom-model path into the picker as `t3-backend/<slug>` and
+      // run with no Pi `/login`. Without a backend everything below stays
+      // empty and the instance keeps its native Pi login behavior.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: `Failed to read server settings for Pi backend wiring: ${cause.message ?? String(cause)}`,
+              cause,
+            }),
+        ),
+      );
+      const wiring = resolvePiBackendWiring({
+        backend,
+        routeKeys: Object.keys(settings.modelRouterRoutes ?? {}),
+        baseEnv: process.env,
+      });
+      const extensionPaths =
+        wiring === undefined
+          ? []
+          : [
+              yield* ensurePiBackendExtension({
+                baseDir,
+                instanceId,
+                content: wiring.extensionContent,
+              }).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderDriverError({
+                      driver: DRIVER_KIND,
+                      instanceId,
+                      detail: `Failed to write the Pi backend extension: ${cause.message ?? String(cause)}`,
+                      cause,
+                    }),
+                ),
+              ),
+            ];
       const baseEnv = mergeProviderInstanceEnvironment(environment);
-      const processEnv = yield* makePiEnvironment(config, baseEnv);
-      const continuationKey = yield* makePiContinuationGroupKey(config, baseEnv);
+      const processEnv = yield* makePiEnvironment(config, {
+        ...baseEnv,
+        ...(wiring !== undefined ? wiring.envOverlay : {}),
+      });
+      const homeContinuationKey = yield* makePiContinuationGroupKey(config, baseEnv);
+      // Backend-wired instances must not resume sessions from a different
+      // model space: two instances sharing one Pi home with different
+      // backends both offer `t3-backend/<slug>` for different upstreams.
+      const continuationKey =
+        wiring === undefined ? homeContinuationKey : `${homeContinuationKey}:backend:${instanceId}`;
       const continuationIdentity = { driverKind: DRIVER_KIND, continuationKey };
       const stampIdentity = withInstanceIdentity({
         instanceId,
@@ -108,27 +165,40 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend,
+        nativeFallback,
       });
-      const effectiveConfig = { ...config, enabled } satisfies PiSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
+      const effectiveConfig = {
+        ...config,
+        enabled,
+        ...(wiring !== undefined && wiring.customModels.length > 0
+          ? { customModels: [...config.customModels, ...wiring.customModels] }
+          : {}),
+      } satisfies PiSettings;
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makePiAdapter(effectiveConfig, {
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
+        ...(extensionPaths.length > 0 ? { extensionPaths } : {}),
       });
-      const textGeneration = yield* makePiTextGeneration(effectiveConfig, processEnv);
+      const textGeneration = yield* makePiTextGeneration(
+        effectiveConfig,
+        processEnv,
+        extensionPaths,
+      );
 
-      const checkProvider = checkPiProviderStatus(effectiveConfig, processEnv).pipe(
+      const checkProvider = checkPiProviderStatus(
+        effectiveConfig,
+        processEnv,
+        undefined,
+        extensionPaths.length > 0 ? { extensionPaths } : undefined,
+      ).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -136,38 +206,19 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv> = {
         Effect.provideService(Path.Path, path),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<PiSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "Pi snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance,
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialPiProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialPiProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          resolveMaintenance().pipe(
-            Effect.flatMap((maintenanceCapabilities) =>
-              enrichPiSnapshot({
-                snapshot: currentSnapshot,
-                maintenanceCapabilities,
-                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                publishSnapshot,
-                httpClient,
-              }),
-            ),
-          ),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build Pi snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichPiSnapshot,
+        httpClient,
+      });
 
       return {
         instanceId,

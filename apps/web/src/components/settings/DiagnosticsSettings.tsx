@@ -260,7 +260,7 @@ function formatProcessName(command: string): string {
 function formatProcessType(process: ServerProcessDiagnosticsEntry): string {
   if (process.depth > 0) return "Subprocess";
   if (
-    /\b(codex|claude|opencode|cursor|devin|droid|grok|deepseek|copilot|hermes|kilo|pi)\b/i.test(
+    /\b(codex|claude|opencode|cursor|devin|droid|grok|deepseek|copilot|hermes|kilo|minimax|pi)\b/i.test(
       process.command,
     )
   )

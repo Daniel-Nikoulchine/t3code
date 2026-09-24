@@ -246,7 +246,6 @@ describe("host context compatibility", () => {
             uploadedAttachments: [],
             modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
             runtimeMode: "full-access",
-            interactionMode: "default",
             workspaceMode: "local",
             branch: null,
             worktreePath: null,

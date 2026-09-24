@@ -19,7 +19,7 @@ import {
   enrichOmpSnapshot,
 } from "../Layers/OmpProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -28,11 +28,6 @@ import {
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
-import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
 
 const decodeOmpSettings = Schema.decodeSync(OmpSettings);
 
@@ -61,7 +56,15 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
   },
   configSchema: OmpSettings,
   defaultConfig: (): OmpSettings => decodeOmpSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -80,6 +83,8 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend: undefined,
+        nativeFallback,
       });
       const effectiveConfig = { ...config, enabled } satisfies OmpSettings;
       const adapter = yield* makeOmpAdapter(effectiveConfig, {
@@ -95,34 +100,19 @@ export const OmpDriver: ProviderDriver<OmpSettings, OmpDriverEnv> = {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<OmpSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "Oh-My-Pi snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialOmpProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialOmpProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          enrichOmpSnapshot({
-            snapshot: currentSnapshot,
-            maintenanceCapabilities: MAINTENANCE_CAPABILITIES,
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-            publishSnapshot,
-            httpClient,
-          }),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build Oh-My-Pi snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichOmpSnapshot,
+        httpClient,
+      });
 
       return {
         instanceId,

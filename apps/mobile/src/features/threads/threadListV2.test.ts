@@ -27,7 +27,6 @@ import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
-  resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2Status,
@@ -45,7 +44,6 @@ function makeThread(
     projectId: ProjectId.make("project-1"),
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     runtimeMode: "full-access",
-    interactionMode: "default",
     branch: null,
     worktreePath: null,
     pullRequests: [],
@@ -59,7 +57,6 @@ function makeThread(
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
     ...input,
   };
 }
@@ -120,29 +117,6 @@ describe("resolveThreadListV2SnoozeMenuSelection", () => {
   });
 });
 
-describe("resolveThreadListV2Enabled", () => {
-  it("defaults on when the device has never chosen", () => {
-    expect(
-      resolveThreadListV2Enabled({ legacyPreference: undefined, preferencesLoaded: true }),
-    ).toBe(true);
-  });
-
-  it("honors an explicit legacy opt-in", () => {
-    expect(resolveThreadListV2Enabled({ legacyPreference: true, preferencesLoaded: true })).toBe(
-      false,
-    );
-    expect(resolveThreadListV2Enabled({ legacyPreference: false, preferencesLoaded: true })).toBe(
-      true,
-    );
-  });
-
-  it("holds the default while preferences are still loading so the list does not remount", () => {
-    expect(
-      resolveThreadListV2Enabled({ legacyPreference: undefined, preferencesLoaded: false }),
-    ).toBe(true);
-  });
-});
-
 describe("resolveThreadListV2Status", () => {
   it("prioritizes approval over a running session", () => {
     const thread = makeThread({
@@ -167,6 +141,14 @@ describe("resolveThreadListV2Status", () => {
     expect(resolveThreadListV2Status(makeThread({ id: ThreadId.make("t"), title: "t" }))).toBe(
       "ready",
     );
+  });
+
+  it("reads background work as working through the shared status decision", () => {
+    expect(
+      resolveThreadListV2Status(
+        makeThread({ id: ThreadId.make("t"), title: "t", backgroundLiveness: "working" }),
+      ),
+    ).toBe("working");
   });
 });
 

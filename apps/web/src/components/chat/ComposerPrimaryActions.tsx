@@ -1,12 +1,10 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
+import { ChevronLeftIcon } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
-import { composerFloatingLayerProps } from "./composerEventScope";
 
 interface PendingActionState {
   questionIndex: number;
@@ -20,8 +18,6 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
-  showPlanFollowUpPrompt: boolean;
-  promptHasText: boolean;
   isSendBusy: boolean;
   sendDisabledReason: string | null;
   isConnecting: boolean;
@@ -31,7 +27,6 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
-  onImplementPlanInNewThread: () => void;
 }
 
 const formatPendingPrimaryActionLabel = (input: {
@@ -60,8 +55,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
-  showPlanFollowUpPrompt,
-  promptHasText,
   isSendBusy,
   sendDisabledReason,
   isConnecting,
@@ -71,7 +64,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
-  onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -88,10 +80,10 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       className={cn(
         "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
         insidePendingAction
-          ? "size-8 sm:size-7"
+          ? "size-8 sm:size-6"
           : hasSendableContent
-            ? "size-9 sm:size-8"
-            : "size-8 sm:h-8 sm:w-8",
+            ? "size-9 sm:size-6"
+            : "size-8 sm:size-6",
       )}
       {...pointerFocusProps}
       onClick={onInterrupt}
@@ -158,68 +150,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (showPlanFollowUpPrompt) {
-    if (promptHasText) {
-      return (
-        <Button
-          type="submit"
-          size="sm"
-          className={cn(
-            "rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover",
-            compact ? "h-9 px-3 sm:h-8" : "h-9 px-4 sm:h-8",
-          )}
-          {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-        >
-          {isConnecting || isSendBusy ? "Sending..." : "Refine"}
-        </Button>
-      );
-    }
-
-    return (
-      <div data-chat-composer-implement-actions="true" className="flex items-center justify-end">
-        <Button
-          type="submit"
-          size="sm"
-          className="h-9 rounded-l-full rounded-r-none bg-message-action px-4 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
-          {...pointerFocusProps}
-          disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-        >
-          {isConnecting || isSendBusy ? "Sending..." : "Implement"}
-        </Button>
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button
-                size="sm"
-                variant="default"
-                className="h-9 rounded-l-none rounded-r-full border-l-message-action-foreground/20 bg-message-action px-2 text-message-action-foreground hover:bg-message-action-hover sm:h-8"
-                aria-label="Implementation actions"
-                {...pointerFocusProps}
-                disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-              />
-            }
-          >
-            <ChevronDownIcon className="size-3.5" />
-          </MenuTrigger>
-          <MenuPopup align="end" side="top" {...composerFloatingLayerProps}>
-            <MenuItem
-              disabled={isSendBusy || isSendDisabled || isConnecting || isEnvironmentUnavailable}
-              onClick={() => void onImplementPlanInNewThread()}
-            >
-              Implement in a new thread
-            </MenuItem>
-          </MenuPopup>
-        </Menu>
-      </div>
-    );
-  }
-
   const sendButton = (
     <button
       type="submit"
       className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
+        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:size-6",
         stageBackdropVariant
           ? "bg-transparent text-white enabled:shadow-black/24 enabled:hover:brightness-110"
           : "bg-message-action text-message-action-foreground enabled:shadow-message-action/24 hover:bg-message-action-hover",

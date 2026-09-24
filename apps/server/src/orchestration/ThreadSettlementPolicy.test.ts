@@ -18,7 +18,6 @@ const makeThread = (
   title: "Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
   runtimeMode: "full-access",
-  interactionMode: "default",
   pullRequests: [],
   branch: "feature",
   worktreePath: "/repo",
@@ -32,7 +31,6 @@ const makeThread = (
   latestUserMessageAt: "2026-08-20T00:00:00.000Z",
   hasPendingApprovals: false,
   hasPendingUserInput: false,
-  hasActionableProposedPlan: false,
   ...overrides,
 });
 

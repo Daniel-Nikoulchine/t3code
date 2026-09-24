@@ -55,8 +55,8 @@ OpenAI- or Anthropic-compatible endpoint instead of OpenCode's own login. In
 **Settings > Providers**, tap the plus button, pick a **template** to prefill the
 form (or start from **Custom**), then add the connection once: its base URL (for
 example `https://proxy.example/v1` for an OmniRoute, LiteLLM, or Ollama endpoint,
-API prefix included), the wire protocols it speaks, and its key — reference a
-stored [API key](./providers.md#api-keys) or name the server-environment variable
+API prefix included) and its key — reference a
+stored [API key](./providers.md#api-providers) or name the server-environment variable
 holding it. With a variable, only the name is stored; the key value stays in the
 server environment and never lands in settings, snapshots, or logs. The URL must
 be reachable from the environment's machine, so the same setup works over remote

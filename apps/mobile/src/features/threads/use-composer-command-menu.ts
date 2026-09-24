@@ -1,9 +1,4 @@
-import type {
-  EnvironmentId,
-  ProjectId,
-  ProviderInteractionMode,
-  ServerProvider,
-} from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ServerProvider } from "@t3tools/contracts";
 import { COMPOSER_CONTEXT_MAX_RECORDS } from "@t3tools/contracts";
 import { Alert } from "react-native";
 import { formatComposerContextReference } from "@t3tools/shared/composerContextReferences";
@@ -54,15 +49,9 @@ export function buildComposerSlashCommandItems(input: {
   readonly hasCompactableConversation?: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
-  readonly allowInteractionMode: boolean;
-  readonly selectedProviderStatus: Pick<
-    ServerProvider,
-    "driver" | "slashCommands" | "showInteractionModeToggle"
-  > | null;
+  readonly selectedProviderStatus: Pick<ServerProvider, "driver" | "slashCommands"> | null;
 }): ComposerCommandItem[] {
   const query = input.query.toLowerCase();
-  const allowInteractionMode =
-    input.allowInteractionMode && input.selectedProviderStatus?.showInteractionModeToggle !== false;
   const builtIn = [
     {
       id: "cmd:model",
@@ -71,24 +60,8 @@ export function buildComposerSlashCommandItems(input: {
       label: "/model",
       description: "Switch model",
     },
-    {
-      id: "cmd:plan",
-      type: "slash-command",
-      command: "plan",
-      label: "/plan",
-      description: "Switch to plan mode",
-    },
-    {
-      id: "cmd:default",
-      type: "slash-command",
-      command: "default",
-      label: "/default",
-      description: "Switch to default mode",
-    },
   ] satisfies ComposerCommandItem[];
-  const items: ComposerCommandItem[] = builtIn.filter(
-    (item) => item.command.includes(query) && (item.command === "model" || allowInteractionMode),
-  );
+  const items: ComposerCommandItem[] = builtIn.filter((item) => item.command.includes(query));
 
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction.
@@ -123,23 +96,11 @@ export function resolveComposerCommandSelection(input: {
   readonly draftMessage: string;
   readonly trigger: Pick<ComposerTrigger, "rangeStart" | "rangeEnd">;
   readonly item: ComposerCommandItem;
-  readonly allowInteractionMode: boolean;
 }): {
   readonly text: string;
   readonly cursor: number;
-  readonly interactionMode: ProviderInteractionMode | null;
 } {
   const { draftMessage, trigger, item } = input;
-  if (
-    input.allowInteractionMode &&
-    item.type === "slash-command" &&
-    (item.command === "plan" || item.command === "default")
-  ) {
-    return {
-      ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, ""),
-      interactionMode: item.command,
-    };
-  }
 
   let replacement = "";
   if (item.type === "path") {
@@ -153,7 +114,6 @@ export function resolveComposerCommandSelection(input: {
   }
   return {
     ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, replacement),
-    interactionMode: null,
   };
 }
 
@@ -171,7 +131,6 @@ export function useComposerCommandMenu({
   offersUsageLimits = false,
   enabled = true,
   onChangeDraftMessage,
-  onUpdateInteractionMode,
   onUsageLimits,
 }: {
   readonly draftMessage: string;
@@ -187,7 +146,6 @@ export function useComposerCommandMenu({
   readonly offersUsageLimits?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
-  readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   /** Picking /usage-limits is the action itself; the draft keeps nothing of it. */
   readonly onUsageLimits?: () => void;
 }) {
@@ -335,7 +293,6 @@ export function useComposerCommandMenu({
         hasThread,
         hasCompactableConversation,
         offersUsageLimits,
-        allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus,
       });
 
@@ -453,7 +410,6 @@ export function useComposerCommandMenu({
   }, [
     hasThread,
     hasCompactableConversation,
-    onUpdateInteractionMode,
     pathSearch.entries,
     pullRequestSearch.entries,
     selectedProviderStatus,
@@ -515,26 +471,11 @@ export function useComposerCommandMenu({
         draftMessage,
         trigger,
         item,
-        allowInteractionMode:
-          onUpdateInteractionMode !== undefined &&
-          selectedProviderStatus?.showInteractionModeToggle !== false,
       });
       setSelection({ start: result.cursor, end: result.cursor });
       onChangeDraftMessage(result.text);
-      if (result.interactionMode !== null) {
-        onUpdateInteractionMode?.(result.interactionMode);
-      }
     },
-    [
-      draftMessage,
-      ownerKey,
-      items,
-      onChangeDraftMessage,
-      onUpdateInteractionMode,
-      onUsageLimits,
-      selectedProviderStatus?.showInteractionModeToggle,
-      trigger,
-    ],
+    [draftMessage, ownerKey, items, onChangeDraftMessage, onUsageLimits, trigger],
   );
 
   return {

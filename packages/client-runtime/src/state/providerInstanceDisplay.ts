@@ -27,6 +27,26 @@ function humanizeSlug(slug: string): string {
 }
 
 /**
+ * Humanize an instance id with the driver's brand label as its head: the id
+ * minus the default-instance prefix (the driver slug) plus the remainder
+ * title-cased, so `codex_personal` becomes "Codex Personal" next to the
+ * default "Codex". Ids that do not extend the
+ * default id fall back to plain slug humanizing.
+ */
+function humanizeInstanceId(
+  instanceId: string,
+  driver: ProviderDriverKind,
+  kindLabel: string,
+): string {
+  const defaultId = defaultInstanceIdForDriver(driver);
+  if (instanceId.startsWith(defaultId)) {
+    const rest = instanceId.slice(defaultId.length).replace(/^[_-]+/u, "");
+    if (rest.length > 0) return `${kindLabel} ${humanizeSlug(rest)}`;
+  }
+  return humanizeSlug(instanceId);
+}
+
+/**
  * Resolve an instance's label with a tiered priority:
  *
  *   1. A snapshot `displayName` that differs from the driver's brand label —
@@ -43,7 +63,7 @@ export function resolveProviderInstanceDisplayName(
   const kindLabel = PROVIDER_DISPLAY_NAMES[snapshot.driver] ?? humanizeSlug(snapshot.driver);
   if (trimmedSnapshotName && trimmedSnapshotName !== kindLabel) return trimmedSnapshotName;
   if (snapshot.instanceId !== defaultInstanceIdForDriver(snapshot.driver)) {
-    const humanized = humanizeSlug(snapshot.instanceId);
+    const humanized = humanizeInstanceId(snapshot.instanceId, snapshot.driver, kindLabel);
     if (humanized.length > 0) return humanized;
   }
   return trimmedSnapshotName || kindLabel;

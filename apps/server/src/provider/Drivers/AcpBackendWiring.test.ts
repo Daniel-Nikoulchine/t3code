@@ -139,7 +139,19 @@ interface BackendWiringCase {
     | KiloDriverEnv
     | DroidDriverEnv
   >;
+  /**
+   * Wire the backend reaches this harness through. Defaults to the shared
+   * `OPENAI_*`/`ANTHROPIC_*` overlay; Copilot overrides it because BYOK reads
+   * `COPILOT_PROVIDER_*` and ignores the generic pairs.
+   */
+  readonly assertBackendEnv?: (spawnEnv: NodeJS.ProcessEnv | undefined) => void;
 }
+
+const assertGenericBackendEnv = (spawnEnv: NodeJS.ProcessEnv | undefined): void => {
+  // Backend overlay wins on OPENAI_*/ANTHROPIC_* keys...
+  expect(spawnEnv?.OPENAI_BASE_URL).toBe(BACKEND_BASE_URL);
+  expect(spawnEnv?.ANTHROPIC_BASE_URL).toBe(BACKEND_BASE_URL);
+};
 
 const backendOverlay: ModelBackendConfig = {
   kind: "openai-compatible",
@@ -168,6 +180,14 @@ const cases: ReadonlyArray<BackendWiringCase> = [
     stores: captured.copilot,
     clear: () => {
       captured.copilot.length = 0;
+    },
+    // Copilot's BYOK mode reads COPILOT_PROVIDER_* and skips GitHub auth; the
+    // generic OPENAI_*/ANTHROPIC_* pairs never reach it, so the backend must
+    // land on the BYOK keys instead.
+    assertBackendEnv: (spawnEnv) => {
+      expect(spawnEnv?.COPILOT_PROVIDER_BASE_URL).toBe(BACKEND_BASE_URL);
+      expect(spawnEnv?.COPILOT_PROVIDER_TYPE).toBe("openai");
+      expect(spawnEnv?.OPENAI_BASE_URL).toBe(INSTANCE_BASE_URL);
     },
     create: (backend) =>
       CopilotDriver.create({
@@ -243,9 +263,7 @@ it.layer(testLayer)("AcpDriver model backend wiring", (it) => {
 
         expect(testCase.stores).toHaveLength(1);
         const spawnEnv = testCase.stores[0]?.environment;
-        // Backend overlay wins on OPENAI_*/ANTHROPIC_* keys...
-        expect(spawnEnv?.OPENAI_BASE_URL).toBe(BACKEND_BASE_URL);
-        expect(spawnEnv?.ANTHROPIC_BASE_URL).toBe(BACKEND_BASE_URL);
+        (testCase.assertBackendEnv ?? assertGenericBackendEnv)(spawnEnv);
         // ...while unrelated instance env is preserved.
         expect(spawnEnv?.T3_CUSTOM_KEEP).toBe("kept");
       }),

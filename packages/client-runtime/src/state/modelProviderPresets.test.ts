@@ -3,16 +3,23 @@ import { describe, expect, it } from "vite-plus/test";
 import { PROVIDER_PRESET_LIST } from "./modelProviderPresets.ts";
 
 describe("PROVIDER_PRESET_LIST", () => {
-  it("ships the full nine-template picker list", () => {
-    expect(PROVIDER_PRESET_LIST).toHaveLength(9);
+  it("ships the provider templates with custom as the last option", () => {
+    expect(PROVIDER_PRESET_LIST.map((preset) => preset.id)).toEqual([
+      "openai",
+      "xai",
+      "deepseek",
+      "opencode-zen",
+      "opencode-go",
+      "codebuff",
+      "custom",
+    ]);
   });
 
-  it("keeps ids unique with non-empty labels and hints", () => {
+  it("keeps ids unique with non-empty labels", () => {
     const ids = PROVIDER_PRESET_LIST.map((preset) => preset.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const preset of PROVIDER_PRESET_LIST) {
       expect(preset.label.trim().length).toBeGreaterThan(0);
-      expect(preset.hint.trim().length).toBeGreaterThan(0);
     }
   });
 
@@ -25,11 +32,11 @@ describe("PROVIDER_PRESET_LIST", () => {
     }
   });
 
-  it("leaves the URL blank only for the custom slate and the generic gateway", () => {
+  it("leaves the URL blank only for the custom slate", () => {
     const blank = PROVIDER_PRESET_LIST.filter((preset) => preset.baseUrl.length === 0).map(
       (preset) => preset.id,
     );
-    expect(blank.toSorted()).toEqual(["custom", "gateway"]);
+    expect(blank.toSorted()).toEqual(["custom"]);
   });
 
   it("marks keyless entries explicitly and names the key variable otherwise", () => {
@@ -42,11 +49,6 @@ describe("PROVIDER_PRESET_LIST", () => {
         expect(preset.apiKeyEnv.trim().length).toBeGreaterThan(0);
       }
     }
-    // The generic gateway needs a key but every deployment names it
-    // differently, so it stays keyless-shaped until the user types one.
-    const gateway = PROVIDER_PRESET_LIST.find((preset) => preset.id === "gateway")!;
-    expect(gateway.needsKey).toBe(true);
-    expect(gateway.apiKeyEnv).toBeUndefined();
   });
 
   it("ships only OpenAI-compatible endpoints (no native Anthropic)", () => {

@@ -150,7 +150,7 @@ export function ProviderUpdatePrimaryNotification() {
       ) {
         activeToastRef.current = null;
       }
-      void navigate({ to: "/settings/providers" });
+      void navigate({ to: "/settings/harness" });
     },
     [navigate],
   );

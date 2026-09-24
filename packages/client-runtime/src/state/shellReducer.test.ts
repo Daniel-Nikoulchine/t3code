@@ -29,7 +29,6 @@ const stubThread = {
   title: "Test Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access" as const,
-  interactionMode: "default" as const,
   branch: null,
   worktreePath: null,
   latestTurn: null,
@@ -42,7 +41,6 @@ const stubThread = {
   latestUserMessageAt: null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
-  hasActionableProposedPlan: false,
   session: null,
 } as const;
 

@@ -13,6 +13,34 @@ export const CLINE_AUTO_APPROVE_CONFIG_ID = "auto_approve";
 export const CLINE_MODEL_CONFIG_ID = "model";
 export const CLINE_MODE_CONFIG_ID = "mode";
 
+/**
+ * Spawn-time thinking levels (`cline --help`, cline 3.0.62). ACP exposes no
+ * config option for effort (every id answers "Unknown config option"), so
+ * the picker's choice rides process spawn. `none` omits the flag (provider
+ * default); anything else passes `--thinking <level>`. Bare `--thinking`
+ * means medium, which matches the picker default.
+ */
+export const CLINE_THINKING_LEVELS: ReadonlyArray<string> = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
+
+export function normalizeClineThinkingLevel(value: string | null | undefined): string | undefined {
+  const effort = value?.trim();
+  return effort && (CLINE_THINKING_LEVELS as ReadonlyArray<string>).includes(effort)
+    ? effort
+    : undefined;
+}
+
+export function clineThinkingSpawnArgs(reasoningEffort?: string | null): ReadonlyArray<string> {
+  const level = normalizeClineThinkingLevel(reasoningEffort ?? undefined);
+  if (level === undefined || level === "none") return [];
+  return ["--thinking", level];
+}
+
 type ClineAcpSettings = Pick<ClineSettings, "binaryPath">;
 
 interface ClineAcpRuntimeInput extends Omit<
@@ -23,6 +51,12 @@ interface ClineAcpRuntimeInput extends Omit<
   readonly clineSettings: ClineAcpSettings;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
+  /**
+   * Reasoning effort from the model's `reasoningEffort` picker. Rides
+   * process spawn as `--thinking <level>` because ACP exposes no effort
+   * config option. A changed level needs a new session (see adapter).
+   */
+  readonly reasoningEffort?: string | null;
 }
 
 export function clineAcpPermissionArgs(runtimeMode?: RuntimeMode): ReadonlyArray<string> {
@@ -38,10 +72,15 @@ export function buildClineAcpSpawnInput(
   cwd: string,
   environment?: NodeJS.ProcessEnv,
   runtimeMode?: RuntimeMode,
+  reasoningEffort?: string | null,
 ): AcpSessionRuntime.AcpSpawnInput {
   return {
     command: settings.binaryPath || "cline",
-    args: [...clineAcpPermissionArgs(runtimeMode), "--acp"],
+    args: [
+      ...clineAcpPermissionArgs(runtimeMode),
+      ...clineThinkingSpawnArgs(reasoningEffort),
+      "--acp",
+    ],
     cwd,
     ...(environment ? { env: environment } : {}),
   };
@@ -63,6 +102,7 @@ export const makeClineAcpRuntime = (
           input.cwd,
           input.environment,
           input.runtimeMode,
+          input.reasoningEffort,
         ),
         authMethodId: CLINE_AUTH_METHOD_ID,
       }).pipe(
@@ -97,21 +137,11 @@ export function applyClineAcpModelSelection<E>(input: {
     : Effect.void;
 }
 
-export function resolveClineModeId(
-  interactionMode: "default" | "plan" | null | undefined,
-): string | undefined {
-  if (interactionMode === "plan") return "plan";
-  if (interactionMode === "default") return "act";
-  return undefined;
-}
-
 export function applyClineAcpModeSelection<E>(input: {
   readonly runtime: Pick<AcpSessionRuntime.AcpSessionRuntime["Service"], "setMode">;
-  readonly interactionMode: "default" | "plan" | null | undefined;
   readonly mapError: (cause: EffectAcpErrors.AcpError) => E;
 }): Effect.Effect<void, E> {
-  const modeId = resolveClineModeId(input.interactionMode);
-  return modeId ? input.runtime.setMode(modeId).pipe(Effect.mapError(input.mapError)) : Effect.void;
+  return input.runtime.setMode("act").pipe(Effect.mapError(input.mapError));
 }
 
 export function applyClineAcpAutoApprove(input: {

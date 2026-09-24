@@ -70,6 +70,43 @@ export function resolveComboTargetDisplay(
   return { title: target.model, subtitle: String(target.instanceId) };
 }
 
+export interface ProviderFilterChoice {
+  readonly key: string;
+  readonly label: string;
+  readonly modelCount: number;
+}
+
+/**
+ * Distinct providers behind the catalog's pairings, in first-seen order,
+ * with pairing counts so the provider filter menu can render two-line rows
+ * (label + "N models") like the web provider menu.
+ */
+export function providerFilterChoices(
+  groups: ReadonlyArray<ModelGroup>,
+): ReadonlyArray<ProviderFilterChoice> {
+  const byKey = new Map<string, { label: string; modelCount: number }>();
+  for (const group of groups) {
+    for (const model of group.models) {
+      const existing = byKey.get(model.providerKey);
+      if (existing) {
+        existing.modelCount += 1;
+      } else {
+        byKey.set(model.providerKey, { label: model.providerLabel, modelCount: 1 });
+      }
+    }
+  }
+  return [...byKey.entries()].map(([key, { label, modelCount }]) => ({
+    key,
+    label,
+    modelCount,
+  }));
+}
+
+/** Two-line menu subtitle for a provider filter row. */
+export function providerChoiceSubtitle(modelCount: number): string {
+  return modelCount === 1 ? "1 model" : `${modelCount} models`;
+}
+
 /**
  * Primary and selected providers start open; all other catalogs start closed.
  * A user's disclosure tap inverts that default until the picker is dismissed.

@@ -1675,7 +1675,6 @@ describe("mobile composer drafts", () => {
               options: [{ id: "reasoningEffort", value: "xhigh" }],
             },
             runtimeMode: "approval-required",
-            interactionMode: "plan",
             workspaceSelection: {
               mode: "worktree",
               branch: "main",
@@ -1698,7 +1697,6 @@ describe("mobile composer drafts", () => {
         options: [{ id: "reasoningEffort", value: "xhigh" }],
       },
       runtimeMode: "approval-required",
-      interactionMode: "plan",
       workspaceSelection: {
         mode: "worktree",
         branch: "main",
@@ -2423,13 +2421,11 @@ describe("mobile composer drafts", () => {
       text: "typed before",
       attachments: [],
       runtimeMode: "approval-required",
-      interactionMode: "default",
     };
     const merged: ComposerDraft = {
       text: "typed before\n\nqueued text",
       attachments: [],
       runtimeMode: "full-access",
-      interactionMode: "default",
     };
     // The user edited the text (forcing the partial undo) and also switched
     // interaction mode, but never touched the merge-written runtime mode.
@@ -2437,7 +2433,6 @@ describe("mobile composer drafts", () => {
       text: "typed EDITED before\n\nqueued text",
       attachments: [],
       runtimeMode: "full-access",
-      interactionMode: "plan",
     };
 
     expect(undoComposerDraftMergeState({ [draftKey]: edited }, draftKey, snapshot, merged)).toEqual(
@@ -2446,7 +2441,6 @@ describe("mobile composer drafts", () => {
           text: "typed EDITED before",
           attachments: [],
           runtimeMode: "approval-required",
-          interactionMode: "plan",
         },
       },
     );

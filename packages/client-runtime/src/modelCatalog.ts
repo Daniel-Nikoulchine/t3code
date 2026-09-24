@@ -26,9 +26,10 @@
 import type {
   ModelBackendConnectionId,
   ModelBackendConnections,
-  ProviderInstanceId,
+  ModelRouterRoute,
   ServerProvider,
 } from "@t3tools/contracts";
+import { ProviderInstanceId, T3_ROUTER_CONNECTION_ID } from "@t3tools/contracts";
 
 export type ModelAuthMode = "api-key" | "subscription" | "unknown";
 
@@ -53,6 +54,12 @@ export interface LogicalModelSource {
   authMode: ModelAuthMode;
   /** Snapshot display name; present on native sources (`ServerProviderModel.name` is required). */
   name?: string;
+  /**
+   * Upstream provider label for multi-provider harnesses (`ServerProviderModel.subProvider`).
+   * Pickers prefer this over the harness instance display name so a MiniMax-served
+   * OpenCode Go model reads as its provider, not as "MiniMax".
+   */
+  subProvider?: string;
 }
 
 /** An eligible instance that plausibly could serve the model but currently cannot. */
@@ -71,6 +78,23 @@ export interface LogicalModel {
 }
 
 /**
+ * Upstream provider label for a model-router route, following the MiniMax
+ * rule: the connection (or vendor) that actually serves the model — never
+ * the reserved `t3-router` bucket. Bare routes whose target is the router
+ * itself get no label and fall back to the instance display name.
+ */
+export function routeSubProvider(route: ModelRouterRoute): string | undefined {
+  if (route.target.kind === "connection") {
+    // Neither reserved bucket is a provider label: the router itself nor the
+    // harness-side backend bucket (legacy settings predate its reservation).
+    if (route.target.connectionId === T3_ROUTER_CONNECTION_ID) return undefined;
+    if (String(route.target.connectionId).toLowerCase() === "t3-backend") return undefined;
+    return route.target.connectionId;
+  }
+  return route.target.vendor;
+}
+
+/**
  * How a driver's model ids relate to model backends, distilled once so the
  * catalog (and later the router) never special-cases drivers ad hoc:
  *
@@ -78,12 +102,12 @@ export interface LogicalModel {
  *    custom endpoints plug in via `ANTHROPIC_BASE_URL` (claudeAgent).
  *  - `endpoint-openai` — the harness speaks the OpenAI API; custom endpoints
  *    plug in via its provider config (`model_providers` in config.toml)
- *    (codex).
+ *    (codex), its endpoint env var (`DEEPSEEK_BASE_URL`) (deepseek), or its
+ *    BYOK env set (`COPILOT_PROVIDER_BASE_URL`) (copilot).
  *  - `multi-provider` — the harness natively serves multiple vendors through
  *    its own configuration (opencode, pi, omp, hermes, openclaw, cline, kilo).
  *  - `vendor-locked` — model ids are restricted to the vendor's own set, so
- *    no connection can widen it (cursor, copilot, droid, devin, grok,
- *    deepseek, zcode, antigravity).
+ *    no connection can widen it (cursor, droid, devin, zcode, antigravity).
  *
  * Driver kinds are an open slug (forks ship their own); a driver missing from
  * the map is treated as `vendor-locked` at the read site — the conservative
@@ -98,6 +122,7 @@ export type ProviderModelBinding =
 export const MODEL_BINDING_BY_DRIVER: Record<string, ProviderModelBinding> = {
   claudeAgent: "endpoint-anthropic",
   codex: "endpoint-openai",
+  deepseek: "endpoint-openai",
   opencode: "multi-provider",
   pi: "multi-provider",
   omp: "multi-provider",
@@ -105,12 +130,13 @@ export const MODEL_BINDING_BY_DRIVER: Record<string, ProviderModelBinding> = {
   openclaw: "multi-provider",
   cline: "multi-provider",
   kilo: "multi-provider",
+  minimax: "multi-provider",
   cursor: "vendor-locked",
-  copilot: "vendor-locked",
+  copilot: "endpoint-openai",
   droid: "vendor-locked",
   devin: "vendor-locked",
-  grok: "vendor-locked",
-  deepseek: "vendor-locked",
+  grok: "endpoint-openai",
+  freebuff: "vendor-locked",
   zcode: "vendor-locked",
   antigravity: "vendor-locked",
 };
@@ -200,8 +226,25 @@ export function deriveModelCatalog(input: {
    * becomes a source.
    */
   instanceConnections?: Readonly<Partial<Record<ProviderInstanceId, ModelBackendConnectionId>>>;
+  /**
+   * Callable model slugs served through the shared model router
+   * (`ServerSettings.modelRouterRoutes` keys). An instance linked to the
+   * reserved t3-router connection serves every route — through the proxy's
+   * protocol translation, so no per-connection protocol check applies —
+   * unless its driver is vendor-locked (those instances keep a gap instead
+   * of a source they could never run).
+   */
+  routes?: ReadonlyArray<string>;
+  /**
+   * Per-route upstream label (see {@link routeSubProvider}). Keyed by route
+   * slug so connection- and vendor-targeted routes render their provider
+   * instead of the harness instance display name.
+   */
+  routeSubProviders?: Readonly<Record<string, string>>;
 }): LogicalModel[] {
   const instanceConnections = input.instanceConnections ?? {};
+  const routes = input.routes ?? [];
+  const routeSubProviders = input.routeSubProviders ?? {};
   const eligible = input.providers.filter(isEligibleInstance);
 
   const grouped = new Map<string, ModelAccumulator>();
@@ -227,8 +270,13 @@ export function deriveModelCatalog(input: {
         instanceId: instance.instanceId,
         model: entry.slug,
         via: "native",
-        authMode,
+        // Harness-bucket slugs (`t3-backend/<slug>`, owned by the server's
+        // ModelBackendEnvironment) ride the backend key, never the
+        // instance's own login — so they must not inherit a `subscription`
+        // badge from instance auth.
+        authMode: entry.slug.startsWith("t3-backend/") ? "unknown" : authMode,
         name: entry.name,
+        ...(entry.subProvider ? { subProvider: entry.subProvider } : {}),
       });
       accumulator.firstNativeDriver ??= instance.driver;
     }
@@ -250,16 +298,45 @@ export function deriveModelCatalog(input: {
           model: slug,
           via: "connection",
           authMode: "api-key",
+          // Direct connection link: the connection itself is the upstream.
+          // The reserved router bucket is never a provider label.
+          ...(connectionId !== T3_ROUTER_CONNECTION_ID ? { subProvider: connectionId } : {}),
         });
       }
     }
   }
 
-  // Gaps: eligible instances with no source for the model. Connection-
-  // provided slugs always become sources, so an endpoint-speakable slug
-  // without a source means no linked connection provides it — what is
-  // missing is an API key (plus, for endpoint harnesses, the endpoint
-  // config), not protocol support.
+  // Router sources. Route slugs are callable through the shared proxy by any
+  // instance linked to the reserved t3-router connection — except on
+  // vendor-locked drivers, whose harness resolves slugs against its own
+  // vendor API and could never run them. Auth rides the route's own target
+  // (key, login, or keyless gateway), never the instance, so router sources
+  // stay `unknown` here.
+  for (const slug of routes) {
+    for (const instance of eligible) {
+      if (instanceConnections[instance.instanceId] !== T3_ROUTER_CONNECTION_ID) continue;
+      if ((MODEL_BINDING_BY_DRIVER[instance.driver] ?? "vendor-locked") === "vendor-locked") {
+        continue;
+      }
+      const accumulator = accumulatorFor(slug);
+      const key = `connection\u0000${instance.instanceId}`;
+      if (accumulator.servedBy.has(key)) continue;
+      accumulator.servedBy.add(key);
+      const subProvider = routeSubProviders[slug];
+      accumulator.sources.push({
+        instanceId: instance.instanceId,
+        model: slug,
+        via: "connection",
+        authMode: "unknown",
+        ...(subProvider ? { subProvider } : {}),
+      });
+    }
+  }
+
+  // Gaps: eligible instances with no source for the model. Connection- and
+  // router-provided slugs become sources wherever the driver can run them,
+  // so a remaining gap means a missing API key, a missing endpoint config,
+  // or a vendor-locked harness.
   for (const accumulator of grouped.values()) {
     for (const instance of eligible) {
       if (
@@ -288,4 +365,66 @@ export function deriveModelCatalog(input: {
       gaps: [...accumulator.gaps].sort(compareGaps),
     }))
     .sort((a, b) => (a.modelId < b.modelId ? -1 : a.modelId > b.modelId ? 1 : 0));
+}
+
+/**
+ * Per-instance link into the model backend connections map, mirrored from
+ * `settings.providerInstances[*].connectionId`. Single owner for the loop
+ * web (`providerInstanceConnectionMap`) and mobile (`instanceConnectionMap`)
+ * carried as copies; snapshots do not carry the link, so catalog derivation
+ * needs it as its own input.
+ */
+export function connectionMapFromSettings(settings: {
+  readonly providerInstances?:
+    | Record<string, { readonly connectionId?: ModelBackendConnectionId | undefined } | undefined>
+    | undefined;
+}): Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> {
+  const out: Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> = {};
+  for (const [instanceId, instance] of Object.entries(settings.providerInstances ?? {})) {
+    if (instance?.connectionId) {
+      out[ProviderInstanceId.make(instanceId)] = instance.connectionId;
+    }
+  }
+  return out;
+}
+
+/**
+ * Per-route upstream labels for catalog derivation (see {@link routeSubProvider}).
+ * Single owner for the loop web (`routeSubProvidersFromSettings`) and mobile
+ * (`buildConnectionModelOptions`) carried inline.
+ */
+export function routeLabelsFromSettings(
+  routes: Record<string, ModelRouterRoute> | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [slug, route] of Object.entries(routes ?? {})) {
+    const subProvider = routeSubProvider(route);
+    if (subProvider) out[slug] = subProvider;
+  }
+  return out;
+}
+
+/**
+ * Logical models pooled across provider instances with the backend
+ * connections and router routes from settings. Canonical hull around
+ * {@link deriveModelCatalog} so web (`deriveAppModelCatalog`) and mobile
+ * (`buildConnectionModelOptions`) share input normalization instead of
+ * repeating it.
+ */
+export function resolveModelCatalog(input: {
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly connections: ModelBackendConnections;
+  readonly providerInstances?: Record<
+    string,
+    { readonly connectionId?: ModelBackendConnectionId | undefined } | undefined
+  >;
+  readonly routes?: Record<string, ModelRouterRoute>;
+}): LogicalModel[] {
+  return deriveModelCatalog({
+    providers: input.providers,
+    connections: input.connections,
+    instanceConnections: connectionMapFromSettings({ providerInstances: input.providerInstances }),
+    routes: Object.keys(input.routes ?? {}),
+    routeSubProviders: routeLabelsFromSettings(input.routes),
+  });
 }

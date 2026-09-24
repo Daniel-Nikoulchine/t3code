@@ -12,6 +12,8 @@ import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  isProviderInstancePickerReady,
+  isProviderInstancePickerVisible,
   resolveDefaultProviderModelSelection,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
@@ -26,6 +28,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
+import { resolveDefaultHarnessSelection } from "./ProjectDefaultsSettings.logic";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
@@ -132,6 +135,20 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     updateSettings({ defaultModelSelection: value });
   };
 
+  const harnessOptions = entries.filter(isProviderInstancePickerVisible).map((entry) => {
+    const nextSelection = resolveDefaultHarnessSelection(
+      entry.instanceId,
+      selection,
+      modelOptions.get(entry.instanceId) ?? [],
+    );
+    const disabledReason = !isProviderInstancePickerReady(entry)
+      ? "Not ready"
+      : nextSelection
+        ? modelDisabledReason(entry.instanceId, nextSelection.model)
+        : "No models available";
+    return { entry, selection: nextSelection, disabledReason };
+  });
+
   return (
     <SettingsSection
       id={
@@ -151,6 +168,61 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     >
       {category === "general" ? (
         <>
+          <SettingsRow
+            serverScoped
+            settingKeys={["defaultModelSelection"]}
+            mixed={mixedModel}
+            id={searchableSetting("default-harness").id}
+            title="Harness"
+            description={
+              isProjectScope
+                ? "Agent harness for new threads in this project."
+                : "Default agent harness for new threads. Projects can override it."
+            }
+            resetAction={
+              settings.defaultModelSelection !== null ? (
+                <SettingResetButton label="default harness" onClick={() => setModel(null)} />
+              ) : null
+            }
+            control={
+              <Select
+                value={mixedModel ? null : (selection?.instanceId ?? null)}
+                disabled={unavailable || harnessOptions.length === 0}
+                onValueChange={(instanceId) => {
+                  const option = harnessOptions.find(
+                    (item) => item.entry.instanceId === instanceId,
+                  );
+                  if (option?.selection && !option.disabledReason) setModel(option.selection);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  aria-label="Default harness"
+                >
+                  <SelectValue>
+                    {unavailable
+                      ? "Unavailable"
+                      : mixedModel
+                        ? "Mixed"
+                        : (activeEntry?.displayName ?? "Choose harness")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {harnessOptions.map(({ entry, disabledReason }) => (
+                    <SelectItem
+                      key={entry.instanceId}
+                      value={entry.instanceId}
+                      disabled={disabledReason !== null}
+                      title={disabledReason ?? undefined}
+                    >
+                      {entry.displayName}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            }
+          />
           <SettingsRow
             serverScoped
             settingKeys={["defaultModelSelection"]}
@@ -181,7 +253,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                     activeInstanceId={selection.instanceId}
                     model={selection.model}
                     lockedProvider={null}
-                    instanceEntries={entries}
+                    instanceEntries={[activeEntry]}
                     modelOptionsByInstance={modelOptions}
                     triggerVariant="outline"
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
@@ -190,7 +262,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                     onOpenProviderSetup={(instanceId) => {
                       if (representative)
                         void navigate({
-                          to: "/settings/providers",
+                          to: "/settings/harness",
                           search: { environmentId: representative.environmentId, instanceId },
                         });
                     }}
@@ -207,7 +279,6 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                       onPromptChange={() => {}}
                       modelOptions={selection.options ?? []}
                       allowPromptInjectedEffort={false}
-                      planModeEnabled={settings.planModeEnabled}
                       triggerVariant="outline"
                       triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                       onModelOptionsChange={(options) =>

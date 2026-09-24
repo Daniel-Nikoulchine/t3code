@@ -15,7 +15,7 @@ import { useEnvironments } from "../../state/environments";
 import { SettingsSection } from "./components/SettingsSection";
 
 /**
- * Read-only connections overview plus per-instance Direct/Provider status
+ * Read-only connections overview plus per-instance Own login/Provider status
  * (per-surface decision, not a gap: mobile has no settings-form
  * infrastructure, so there is no connection editor here).
  *
@@ -27,7 +27,7 @@ import { SettingsSection } from "./components/SettingsSection";
  * from the provider snapshot (`resolveProviderBackendLabel` returns
  * `undefined` for native/direct connections — the same rule as
  * `isProviderProxied` in contracts): `Provider: <label>` when routed,
- * `Direct` otherwise. A `connectionId` whose entry is gone (deleted
+ * `Own login` otherwise. A `connectionId` whose entry is gone (deleted
  * connection) routes natively and the row calls it out. Editing (adding
  * connections and the per-instance selection) lives in the web/desktop app
  * under Settings → Providers (list plus button) and Settings → Harness
@@ -130,7 +130,7 @@ export function SettingsProvidersRouteScreen() {
           {rows.map(({ environment, snapshot, orphan }, index) => {
             const backendLabel = resolveProviderBackendLabel(snapshot);
             const proxied = backendLabel !== undefined;
-            const status = proxied ? `Provider: ${backendLabel}` : "Direct";
+            const status = proxied ? `Provider: ${backendLabel}` : "Own login";
             return (
               <View
                 key={`${environment.environmentId}:${snapshot.instanceId}`}

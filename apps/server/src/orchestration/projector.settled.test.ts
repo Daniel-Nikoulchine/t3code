@@ -44,7 +44,6 @@ it.effect("projects settled lifecycle events", () =>
           title: "Thread",
           modelSelection: { provider: "codex", model: "gpt-5.4" },
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: now,

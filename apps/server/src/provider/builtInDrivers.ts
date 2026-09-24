@@ -27,6 +27,7 @@ import { CursorDriver, type CursorDriverEnv } from "./Drivers/CursorDriver.ts";
 import { DeepSeekDriver, type DeepSeekDriverEnv } from "./Drivers/DeepSeekDriver.ts";
 import { DevinDriver, type DevinDriverEnv } from "./Drivers/DevinDriver.ts";
 import { DroidDriver, type DroidDriverEnv } from "./Drivers/DroidDriver.ts";
+import { FreebuffDriver, type FreebuffDriverEnv } from "./Drivers/FreebuffDriver.ts";
 import { GrokDriver, type GrokDriverEnv } from "./Drivers/GrokDriver.ts";
 import { CopilotDriver, type CopilotDriverEnv } from "./Drivers/CopilotDriver.ts";
 import { HermesDriver, type HermesDriverEnv } from "./Drivers/HermesDriver.ts";
@@ -36,6 +37,7 @@ import { OmpDriver, type OmpDriverEnv } from "./Drivers/OmpDriver.ts";
 import { OpenClawDriver, type OpenClawDriverEnv } from "./Drivers/OpenClawDriver.ts";
 import { AntigravityDriver, type AntigravityDriverEnv } from "./Drivers/AntigravityDriver.ts";
 import { PiDriver, type PiDriverEnv } from "./Drivers/PiDriver.ts";
+import { MinimaxDriver, type MinimaxDriverEnv } from "./Drivers/MinimaxDriver.ts";
 import { ZcodeDriver, type ZcodeDriverEnv } from "./Drivers/ZcodeDriver.ts";
 import type { AnyProviderDriver } from "./ProviderDriver.ts";
 
@@ -47,11 +49,13 @@ import type { AnyProviderDriver } from "./ProviderDriver.ts";
 export type BuiltInDriversEnv =
   | ClaudeDriverEnv
   | ClineDriverEnv
+  | CopilotDriverEnv
   | CodexDriverEnv
   | CursorDriverEnv
   | DeepSeekDriverEnv
   | DevinDriverEnv
   | DroidDriverEnv
+  | FreebuffDriverEnv
   | GrokDriverEnv
   | HermesDriverEnv
   | KiloDriverEnv
@@ -60,6 +64,7 @@ export type BuiltInDriversEnv =
   | OpenClawDriverEnv
   | AntigravityDriverEnv
   | PiDriverEnv
+  | MinimaxDriverEnv
   | ZcodeDriverEnv;
 
 /**
@@ -71,10 +76,12 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   CodexDriver,
   ClaudeDriver,
   ClineDriver,
+  CopilotDriver,
   CursorDriver,
   DeepSeekDriver,
   DevinDriver,
   DroidDriver,
+  FreebuffDriver,
   GrokDriver,
   HermesDriver,
   KiloDriver,
@@ -83,5 +90,6 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   OpenClawDriver,
   AntigravityDriver,
   PiDriver,
+  MinimaxDriver,
   ZcodeDriver,
 ];

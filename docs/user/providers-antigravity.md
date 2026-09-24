@@ -72,8 +72,7 @@ The model list comes from your Antigravity account and can differ from other
 Antigravity apps. A resumed thread keeps its selected model. If access to that
 model ends, select another available model before continuing.
 
-Use Antigravity's native `/plan` command for planning. T3 Code's separate Plan mode
-is unavailable. Tool approvals follow [Permission modes](./permission-modes.md).
+Use Antigravity's native `/plan` command for planning. Tool approvals follow [Permission modes](./permission-modes.md).
 Questions with fixed choices still need one of the offered answers, even in
 **Full access**.
 

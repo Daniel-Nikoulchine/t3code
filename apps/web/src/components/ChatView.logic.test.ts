@@ -55,8 +55,6 @@ import {
   recallCheckoutIsRepo,
   rememberCheckoutIsRepo,
   resolveBackgroundDraftWorkspaceOptions,
-  resolveComposerInteractionMode,
-  restorePlanFollowUpComposer,
   resolveComposerProviderSelection,
   resolveDraftPromotionNavigationTarget,
   findRecordedWorktreeSetup,
@@ -85,7 +83,6 @@ import {
   shouldOpenProactiveTurnDiff,
   shouldRenderPreviewMiniPlayer,
   shouldShowBranchMismatchBanner,
-  shouldShowPlanFollowUpPrompt,
   shouldWriteThreadErrorToCurrentServerThread,
   toolGroupConsumesUpwardNavigation,
   waitForRevertedMessage,
@@ -974,10 +971,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
       model: "gpt-5.4",
     },
     runtimeMode: "full-access",
-    interactionMode: "default",
     session: null,
     messages: [],
-    proposedPlans: [],
     activities: [],
     checkpoints: [],
     pullRequests: [],
@@ -1101,7 +1096,6 @@ describe("buildLoadingThreadFromShell", () => {
         model: "gpt-5.4",
       },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: "main",
       worktreePath: null,
       latestTurn: null,
@@ -1117,7 +1111,6 @@ describe("buildLoadingThreadFromShell", () => {
       latestUserMessageAt: now,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
     } satisfies ThreadShell;
 
     expect(buildLoadingThreadFromShell(shell)).toMatchObject({
@@ -1128,7 +1121,6 @@ describe("buildLoadingThreadFromShell", () => {
       branch: "main",
       deletedAt: null,
       messages: [],
-      proposedPlans: [],
       activities: [],
       checkpoints: [],
     });
@@ -1333,12 +1325,8 @@ describe("resolveComposerProviderSelection", () => {
   });
 
   it("uses the custom instance's capability instead of the default instance", () => {
-    const defaultEntry = entry("antigravity", "antigravity", {
-      showInteractionModeToggle: true,
-    });
-    const customEntry = entry("antigravity", "google_work", {
-      showInteractionModeToggle: false,
-    });
+    const defaultEntry = entry("antigravity", "antigravity", {});
+    const customEntry = entry("antigravity", "google_work", {});
     const selection = resolveComposerProviderSelection({
       entries: [defaultEntry, customEntry],
       candidateInstanceIds: [customEntry.instanceId],
@@ -1347,19 +1335,11 @@ describe("resolveComposerProviderSelection", () => {
     });
 
     expect(selection.selectedProviderEntry?.instanceId).toBe(customEntry.instanceId);
-    expect(
-      resolveComposerInteractionMode({
-        provider: selection.selectedProviderEntry?.snapshot,
-        planModeEnabled: true,
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
   });
 
   it("uses the fallback provider's plan capability after the draft's instance is disabled", () => {
     const disabledEntry = entry("antigravity", "antigravity", {
       enabled: false,
-      showInteractionModeToggle: false,
     });
     const fallbackEntry = entry("codex");
     const selection = resolveComposerProviderSelection({
@@ -1370,13 +1350,6 @@ describe("resolveComposerProviderSelection", () => {
     });
 
     expect(selection.selectedProviderEntry?.instanceId).toBe(fallbackEntry.instanceId);
-    expect(
-      resolveComposerInteractionMode({
-        provider: selection.selectedProviderEntry?.snapshot,
-        planModeEnabled: true,
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: true, interactionMode: "plan" });
   });
 
   it("keeps a signed-out selection instead of silently switching providers", () => {
@@ -1514,48 +1487,6 @@ describe("resolveComposerProviderSelection", () => {
     });
 
     expect(selection.selectedProviderEntry).toBeUndefined();
-  });
-});
-
-describe("resolveComposerInteractionMode", () => {
-  it("resets a restored plan draft when the selected instance does not support plan mode", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: true,
-        provider: { showInteractionModeToggle: false },
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
-  });
-
-  it("keeps legacy plan behavior for providers that omit the capability", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: true,
-        provider: {},
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: true, interactionMode: "plan" });
-  });
-
-  it("resets a restored plan draft when the beta setting is off", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: false,
-        provider: { showInteractionModeToggle: true },
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
-  });
-
-  it("disables plan mode until the selected provider is available", () => {
-    expect(
-      resolveComposerInteractionMode({
-        planModeEnabled: true,
-        provider: null,
-        interactionMode: "plan",
-      }),
-    ).toEqual({ enabled: false, interactionMode: "default" });
   });
 });
 
@@ -1813,31 +1744,6 @@ describe("shouldShowBranchMismatchBanner", () => {
     expect(
       shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
     ).toBe(false);
-  });
-});
-
-describe("shouldShowPlanFollowUpPrompt", () => {
-  const base = {
-    pendingUserInputCount: 0,
-    interactionMode: "plan" as const,
-    latestTurnSettled: true,
-    hasActionableProposedPlan: true,
-    hasComposerAttachments: false,
-  };
-
-  it("shows plan actions for a settled actionable plan without attachments", () => {
-    expect(shouldShowPlanFollowUpPrompt(base)).toBe(true);
-  });
-
-  it("hides plan actions while the composer has staged attachments", () => {
-    expect(shouldShowPlanFollowUpPrompt({ ...base, hasComposerAttachments: true })).toBe(false);
-  });
-
-  it("preserves the existing plan follow-up gates", () => {
-    expect(shouldShowPlanFollowUpPrompt({ ...base, pendingUserInputCount: 1 })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, interactionMode: "default" })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, latestTurnSettled: false })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, hasActionableProposedPlan: false })).toBe(false);
   });
 });
 
@@ -2424,69 +2330,6 @@ describe("rewind draft recovery", () => {
     expect(files[0]?.name).toBe("notes.txt");
     expect(await files[0]?.text()).toBe("original bytes");
     expect(fetchMock.mock.calls[0]?.[0]).toBe("https://server.test/asset/signed");
-  });
-});
-
-describe("restorePlanFollowUpComposer", () => {
-  it("writes back every field a cleared plan follow-up composer held", () => {
-    const snapshot = {
-      prompt: "Follow up on the plan",
-      terminalContexts: [
-        {
-          id: "terminal-1",
-          threadId: ThreadId.make("thread-1"),
-          createdAt: "2026-09-11T00:00:00.000Z",
-          terminalId: "main",
-          terminalLabel: "Main",
-          lineStart: 1,
-          lineEnd: 2,
-          text: "output",
-        },
-      ],
-      reviewComments: [
-        {
-          id: "review-1",
-          sectionId: "file:a.ts",
-          sectionTitle: "File comment",
-          filePath: "a.ts",
-          startIndex: 0,
-          endIndex: 0,
-          rangeLabel: "L1",
-          text: "look here",
-          diff: "",
-        },
-      ],
-      previewAnnotations: [],
-    };
-    const writePrompt = vi.fn();
-    const writeTerminalContexts = vi.fn();
-    const writeReviewComments = vi.fn();
-    const writePreviewAnnotations = vi.fn();
-    const resetCursor = vi.fn();
-
-    restorePlanFollowUpComposer({
-      snapshot,
-      writePrompt,
-      writeTerminalContexts,
-      writeReviewComments,
-      writePreviewAnnotations,
-      resetCursor,
-    });
-
-    expect(writePrompt).toHaveBeenCalledTimes(1);
-    expect(writePrompt).toHaveBeenCalledWith("Follow up on the plan");
-    expect(writeTerminalContexts).toHaveBeenCalledTimes(1);
-    expect(writeTerminalContexts).toHaveBeenCalledWith(snapshot.terminalContexts);
-    expect(writeReviewComments).toHaveBeenCalledTimes(1);
-    expect(writeReviewComments).toHaveBeenCalledWith(snapshot.reviewComments);
-    expect(writePreviewAnnotations).toHaveBeenCalledTimes(1);
-    expect(writePreviewAnnotations).toHaveBeenCalledWith(snapshot.previewAnnotations);
-    expect(resetCursor).toHaveBeenCalledTimes(1);
-    expect(resetCursor).toHaveBeenCalledWith({
-      cursor: expect.any(Number),
-      prompt: "Follow up on the plan",
-      detectTrigger: true,
-    });
   });
 });
 

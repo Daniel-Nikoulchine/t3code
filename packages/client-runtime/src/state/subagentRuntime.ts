@@ -477,7 +477,7 @@ export function foldSubagentActivities(
       case "task.started": {
         const taskId = asString(payload.taskId);
         if (!taskId) break;
-        // Only real agents join the roster. Shells, monitors, and plan-mode
+        // Only real agents join the roster. Shells, monitors, and inert
         // tasks are background work — they render in the ordinary work log,
         // not the Agents surface (a "Run 12s stall" shell is not a subagent).
         if (isBackgroundTaskActivity(payload)) break;

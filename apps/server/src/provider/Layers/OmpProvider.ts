@@ -2,7 +2,6 @@ import {
   type CustomModelSetting,
   type ModelCapabilities,
   type OmpSettings,
-  type ServerProvider,
   type ServerProviderAuth,
   type ServerProviderModel,
   type ServerProviderSkill,
@@ -17,7 +16,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
-import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -28,11 +26,9 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "../providerMaintenance.ts";
+import { makeEnrichSnapshot } from "../providerMaintenance.ts";
 import { buildOmpRpcSpawnArgs, resolveOmpAgentDir } from "./OmpAdapter.ts";
+import { isBackendBucketProviderId, stripBackendBucketPrefix } from "../ModelBackendEnvironment.ts";
 import { makePiRpcClient, makePiRpcProcessTransport } from "../pi/PiRpcClient.ts";
 import {
   extractSkillNames,
@@ -49,7 +45,6 @@ const OMP_PRESENTATION = {
   displayName: "Oh My Pi",
   supportsConversationRollback: false,
   badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
 } as const;
 
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -149,9 +144,30 @@ export function ompModelsFromCatalog(
     const slug = ompModelSlug(entry);
     if (seen.has(slug)) continue;
     seen.add(slug);
+    const provider = entry.provider?.trim() || undefined;
+    const isBucket = isBackendBucketProviderId(provider);
+    // Strip stale bucket segments first (see Pi's discovery mapping): a
+    // prefixed slug copied into the connection's model list must not turn
+    // the bucket into its own subtitle.
+    const cleanId = isBucket ? stripBackendBucketPrefix(entry.id) : entry.id;
+    const hasUpstreamPath = isBucket ? cleanId.includes("/") : entry.id.includes("/");
+    // `t3-backend` is T3's harness bucket for backend-wired instances, not a
+    // model provider — never surface it. With an upstream path in the id the
+    // upstream is the subtitle; bare backend models fall back to the instance
+    // name. Native providers keep their provider label as-is (mirrors pi's
+    // `buildPiModelsFromDiscovery`).
+    let subProvider: string | undefined;
+    if (isBucket) {
+      subProvider = hasUpstreamPath ? cleanId.slice(0, cleanId.indexOf("/")) : undefined;
+    } else {
+      subProvider = provider;
+    }
+    const bareName =
+      isBucket && hasUpstreamPath ? cleanId.slice(cleanId.indexOf("/") + 1) : cleanId;
     models.push({
       slug,
-      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : slug,
+      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : bareName,
+      ...(subProvider ? { subProvider } : {}),
       isCustom: false,
       ...(currentModelId !== undefined && entry.id === currentModelId ? { isDefault: true } : {}),
       capabilities: OMP_THINKING_CAPABILITIES,
@@ -416,25 +432,4 @@ export const checkOmpProviderStatus = Effect.fn("checkOmpProviderStatus")(functi
   });
 });
 
-export const enrichOmpSnapshot = (input: {
-  readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
-  readonly enableProviderUpdateChecks?: boolean;
-  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
-  readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
-  const { snapshot, publishSnapshot } = input;
-
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
-    enableProviderUpdateChecks: input.enableProviderUpdateChecks,
-  }).pipe(
-    Effect.provideService(HttpClient.HttpClient, input.httpClient),
-    Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Oh-My-Pi version advisory enrichment failed", {
-        errorTag: causeErrorTag(cause),
-      }),
-    ),
-    Effect.asVoid,
-  );
-};
+export const enrichOmpSnapshot = makeEnrichSnapshot("Oh-My-Pi");

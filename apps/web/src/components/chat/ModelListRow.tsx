@@ -50,9 +50,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
   onToggleFavorite: () => void;
 }) {
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
-  const providerLabel = props.model.subProvider
-    ? `${props.providerDisplayName} · ${props.model.subProvider}`
-    : props.providerDisplayName;
+  const providerLabel = props.model.subProvider ?? props.providerDisplayName;
 
   const row = (
     <ComboboxItem

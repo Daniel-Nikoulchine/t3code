@@ -15,6 +15,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
+  | "/settings/harness"
   | "/settings/integrations"
   | "/settings/source-control"
   | "/settings/connections"
@@ -71,10 +72,9 @@ export interface SettingsSearchAvailability {
  * Section labels in sidebar order. The sidebar nav and the search-result
  * subtitles both render from this record, so each label exists once.
  *
- * The providers/harness split is consolidated: `/settings/providers` owns all
- * provider settings (connections, API keys, models, instances) under one
- * "Providers" label; `/settings/harness` survives only as a redirecting route
- * for old deep links and is intentionally absent here.
+ * Harness owns the full per-instance editor (setup, sign-in, connection,
+ * models, runtime, environment); Providers holds only the shared backend
+ * settings (API connections, keys, usage hubs, probe cadence).
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/projects": "Project",
@@ -82,7 +82,8 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
-  "/settings/providers": "Providers",
+  "/settings/providers": "Provider",
+  "/settings/harness": "Harness",
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
@@ -107,6 +108,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Project overview",
     to: "/settings/projects",
     searchTerms: ["name icon emoji image checkout remove delete"],
+  },
+  {
+    id: "default-harness",
+    title: "Default harness",
+    to: "/settings/general",
+    scope: "project-defaults",
+    searchTerms: ["new thread project agent provider runtime"],
   },
   {
     id: "default-model",
@@ -265,7 +273,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Response streaming",
     to: "/settings/general",
     scope: "project-defaults",
-    searchTerms: ["output token paragraph buffered wait turn legacy"],
+    searchTerms: ["output token paragraph buffered wait turn"],
   },
   {
     id: "hide-whitespace-changes",
@@ -395,24 +403,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
-    id: "legacy-plan-mode",
-    title: "Plan mode (legacy)",
-    to: "/settings/general",
-    searchTerms: ["build plan composer old"],
-  },
-  {
-    id: "legacy-context-window-indicator",
-    title: "Context window indicator (legacy)",
-    to: "/settings/general",
-    searchTerms: ["composer meter usage tokens circle old"],
-  },
-  {
-    id: "legacy-sidebar",
-    title: "Sidebar (legacy)",
-    to: "/settings/general",
-    searchTerms: ["project thread tree old flat list"],
-  },
-  {
     id: "keybindings",
     title: "Keybindings",
     to: "/settings/keybindings",
@@ -460,44 +450,17 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "providers",
     title: "Provider instances",
-    to: "/settings/providers",
+    to: "/settings/harness",
     searchTerms: [
-      "provider instances harness agents cli codex claude cursor devin droid grok copilot opencode openclaw antigravity google sign in sign out install subscription authentication api key models configuration binary path config directory endpoint gateway token session arguments environment variables display name accent color custom favorite hidden auto compact fallback combo reroute use provider direct connection select proxy",
+      "provider providers instances harness agents cli openai anthropic codex claude cline cursor devin droid freebuff grok copilot hermes kilo minimax opencode openclaw antigravity pi deepseek zcode google sign in sign out install subscription authentication api key models configuration binary path config directory endpoint gateway token session arguments environment variables display name accent color custom favorite hidden auto compact fallback combo reroute use provider direct connection select proxy",
     ],
   },
   {
     id: "provider-backends",
-    title: "Providers",
+    title: "API providers",
     to: "/settings/providers",
     searchTerms: [
-      "model backend provider connections connection connection id openai-compatible base url api key variable external backend display name via provider connected direct add remove test template preset presets provider list proxy global via proxy",
-    ],
-    providerSettingsOnly: true,
-  },
-  {
-    id: "provider-credentials",
-    title: "API keys",
-    to: "/settings/providers",
-    searchTerms: [
-      "stored api keys credentials vendor anthropic openai google gemini deepseek xai custom secret last four test add remove edit",
-    ],
-    providerSettingsOnly: true,
-  },
-  {
-    id: "model-catalog",
-    title: "Models",
-    to: "/settings/providers",
-    searchTerms: [
-      "models matrix catalog logical model instances sources gaps needs api key vendor locked subscription protocol",
-    ],
-    providerSettingsOnly: true,
-  },
-  {
-    id: "model-router",
-    title: "Model routing",
-    to: "/settings/providers",
-    searchTerms: [
-      "model router routing rules route logical model id upstream target vendor connection api key translate openai anthropic built-in",
+      "api providers model backend provider connections connection connection id openai-compatible base url api key variable api keys credentials stored vendor secret last four inline new key external backend display name via provider connected direct add remove test template preset presets provider list proxy global via proxy",
     ],
     providerSettingsOnly: true,
   },
@@ -772,10 +735,12 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/general": null,
   "/settings/appearance": null,
   "/settings/snap-shot": null,
-  // Keybindings fan out to the selection; Providers shows the representative
-  // environment at any selection. Neither needs a particular scope to render.
+  // Keybindings fan out to the selection; Providers and Harness show the
+  // representative environment at any selection. Neither needs a particular
+  // scope to render.
   "/settings/keybindings": null,
   "/settings/providers": null,
+  "/settings/harness": null,
   "/settings/integrations": null,
   "/settings/source-control": "environment-defaults",
   "/settings/connections": "connections",

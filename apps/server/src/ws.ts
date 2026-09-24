@@ -344,7 +344,6 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
   {
     type:
       | "thread.message-sent"
-      | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
@@ -353,7 +352,6 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
 > {
   return (
     event.type === "thread.message-sent" ||
-    event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
@@ -1394,7 +1392,6 @@ const makeWsRpcLayer = (
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
-                interactionMode: bootstrap.createThread.interactionMode,
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
                 createdAt: bootstrap.createThread.createdAt,
@@ -3426,11 +3423,12 @@ const makeWsRpcLayer = (
               // the client. The sentinel can never leak: materialized
               // settings hold real values, and an empty/missing entry just
               // probes keyless.
-              const backend = yield* input.apiKeyCredentialId === undefined
+              const credentialId = input.apiKeyCredentialId;
+              const backend = yield* credentialId === undefined
                 ? Effect.succeed(input.backend)
                 : Effect.gen(function* () {
                     const settings = yield* serverSettings.getSettings;
-                    const value = settings.modelCredentials[input.apiKeyCredentialId]?.value;
+                    const value = settings.modelCredentials[credentialId]?.value;
                     return value === undefined ||
                       value.length === 0 ||
                       value === MODEL_CREDENTIAL_VALUE_REDACTED
@@ -3438,7 +3436,18 @@ const makeWsRpcLayer = (
                       : { ...input.backend, apiKey: value };
                   });
               return yield* testModelBackendResult(backend);
-            }),
+            }).pipe(
+              // The RPC contract only declares authorization failures: an
+              // unreadable settings store surfaces as a failed probe result
+              // instead of rejecting the call.
+              Effect.catchTag("ServerSettingsError", (cause) =>
+                Effect.map(DateTime.now, (now) => ({
+                  ok: false as const,
+                  error: `Failed to read server settings: ${cause.message}`,
+                  checkedAt: DateTime.formatIso(now),
+                })),
+              ),
+            ),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.deviceList]: (_input) =>

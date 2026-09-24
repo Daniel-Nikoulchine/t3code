@@ -282,7 +282,6 @@ interface TurnAnalyticsMetadata {
   readonly mixedModels: boolean;
   readonly model?: string;
   readonly effort?: string;
-  readonly interactionMode?: string;
   readonly runtimeMode?: string;
 }
 
@@ -749,7 +748,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ...input.completion.terminalProperties,
       ...(metadata?.model ? { model: metadata.model } : {}),
       ...(metadata?.effort ? { effort: metadata.effort } : {}),
-      ...(metadata?.interactionMode ? { interactionMode: metadata.interactionMode } : {}),
       ...(metadata?.runtimeMode ? { runtimeMode: metadata.runtimeMode } : {}),
       ...(metadata ? { mixedModels: metadata.mixedModels } : {}),
       ...(metadata
@@ -788,7 +786,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly provider: ProviderDriverKind;
     readonly threadId: ThreadId;
     readonly modelSelection: ProviderSendTurnInput["modelSelection"];
-    readonly interactionMode: ProviderSendTurnInput["interactionMode"];
     readonly runtimeMode: string | undefined;
   }) {
     const startedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
@@ -809,7 +806,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         requestId,
         ...(input.modelSelection?.model ? { model: input.modelSelection.model } : {}),
         ...(effort ? { effort } : {}),
-        ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
         ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
       };
       session.pendingByRequestId.set(requestId, metadata);
@@ -893,11 +889,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               ? { effort: existingMetadata.effort }
               : input.metadata.effort
                 ? { effort: input.metadata.effort }
-                : {}),
-            ...(base?.interactionMode
-              ? {}
-              : input.metadata.interactionMode
-                ? { interactionMode: input.metadata.interactionMode }
                 : {}),
             ...(base?.runtimeMode
               ? {}
@@ -1890,7 +1881,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "send-turn",
       "provider.thread_id": input.threadId,
-      "provider.interaction_mode": input.interactionMode,
       "provider.attachment_count": attachments.length,
     });
     let metricProvider = "unknown";
@@ -1955,7 +1945,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: routed.adapter.provider,
           threadId: input.threadId,
           modelSelection: analyticsModelSelection,
-          interactionMode: input.interactionMode,
           runtimeMode: routed.runtimeMode,
         }),
         (turnMetadata) =>
@@ -2110,10 +2099,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* analytics.record("provider.turn.sent", {
         provider: executedAdapter.provider,
         model: executedTarget?.model,
-        interactionMode: input.interactionMode,
         // Session-start events alone skew runtime mode toward users who toggle
         // often, since every toggle restarts the session. Recording it per turn
-        // gives a usage-weighted view and lets it cross with interactionMode.
+        // gives a usage-weighted view.
         runtimeMode: routed.runtimeMode,
         attachmentCount: attachments.length,
         hasInput: typeof input.input === "string" && input.input.trim().length > 0,

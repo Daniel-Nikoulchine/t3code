@@ -18,7 +18,6 @@
 import {
   ApprovalRequestId,
   type OmpSettings,
-  EventId,
   type ProviderRuntimeEvent,
   type ProviderSession,
   ProviderDriverKind,
@@ -29,7 +28,6 @@ import {
 } from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
-import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -39,9 +37,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -55,6 +51,11 @@ import {
   ProviderAdapterSessionNotFoundError,
   ProviderAdapterValidationError,
 } from "../Errors.ts";
+import {
+  makeEventStamper,
+  makeThreadLockRegistry,
+  requireScaffoldSession,
+} from "../acp/AcpAdapterScaffold.ts";
 import { hasOmpSkillMention, rewriteOmpSkillMentions } from "../Drivers/OmpSkills.ts";
 import {
   buildPromptCommand,
@@ -301,54 +302,23 @@ export function makeOmpAdapter(ompSettings: OmpSettings, options?: OmpAdapterLiv
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
     const sessions = new Map<ThreadId, OmpSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "crypto/randomUUIDv4",
-            detail: "Failed to generate Oh-My-Pi runtime identifier.",
-            cause,
-          }),
-      ),
-    );
-    const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
-    const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
+    const locks = yield* makeThreadLockRegistry;
+    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+      locks.withThreadLock(threadId, effect);
+    const stamper = yield* makeEventStamper({
+      provider: PROVIDER,
+      detail: "Failed to generate Oh-My-Pi runtime identifier.",
+    });
+    const nowIso = stamper.nowIso;
+    const randomUUIDv4 = stamper.randomUUIDv4;
+    const makeEventStamp = stamper.makeEventStamp;
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
 
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing = current.get(threadId);
-        if (existing) return Effect.succeed([existing, current] as const);
-        return Semaphore.make(1).pipe(
-          Effect.map((semaphore) => {
-            const next = new Map(current);
-            next.set(threadId, semaphore);
-            return [semaphore, next] as const;
-          }),
-        );
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
-
-    const requireSession = (
-      threadId: ThreadId,
-    ): Effect.Effect<OmpSessionContext, ProviderAdapterSessionNotFoundError> => {
-      const ctx = sessions.get(threadId);
-      if (!ctx || ctx.stopped) {
-        return Effect.fail(
-          new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
-        );
-      }
-      return Effect.succeed(ctx);
-    };
+    const requireSession = requireScaffoldSession(sessions, PROVIDER);
 
     const logNative = (threadId: ThreadId, method: string, payload: unknown) =>
       Effect.gen(function* () {
@@ -448,11 +418,7 @@ export function makeOmpAdapter(ompSettings: OmpSettings, options?: OmpAdapterLiv
         yield* Effect.ignore(ctx.rpc.close);
         yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
         sessions.delete(ctx.threadId);
-        yield* SynchronizedRef.update(threadLocksRef, (current) => {
-          const next = new Map(current);
-          next.delete(ctx.threadId);
-          return next;
-        });
+        yield* locks.releaseThreadLock(ctx.threadId);
         yield* offerRuntimeEvent({
           type: "session.exited",
           ...(yield* makeEventStamp()),

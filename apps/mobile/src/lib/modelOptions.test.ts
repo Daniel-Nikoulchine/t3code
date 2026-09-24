@@ -40,6 +40,44 @@ describe("mobile model options", () => {
     expect(buildModelOptions(config, null)[0]?.providerLabel).toBe("Hermes");
   });
 
+  it("resolves driver labels from contracts instead of a hand-kept list", () => {
+    const provider = (instanceId: string, driver: string) => ({
+      instanceId,
+      driver,
+      enabled: true,
+      installed: true,
+      auth: { status: "authenticated" },
+      models: [{ slug: "m", name: "M", isCustom: false, capabilities: null }],
+    });
+    const config = {
+      providers: [
+        provider("cursor", "cursor"),
+        provider("copilot", "copilot"),
+        provider("omp", "omp"),
+      ],
+    } as unknown as ServerConfig;
+
+    const labels = buildModelOptions(config, null).map((option) => option.providerLabel);
+    expect(labels).toEqual(["Cursor", "Copilot", "Oh My Pi"]);
+  });
+
+  it("falls back to the instance id for unknown fork drivers", () => {
+    const config = {
+      providers: [
+        {
+          instanceId: "my_fork",
+          driver: "my-fork",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          models: [{ slug: "m", name: "M", isCustom: false, capabilities: null }],
+        },
+      ],
+    } as unknown as ServerConfig;
+
+    expect(buildModelOptions(config, null)[0]?.providerLabel).toBe("my_fork");
+  });
+
   it("groups model-first and flags legacy pairings", () => {
     const config = {
       providers: [
@@ -615,6 +653,7 @@ describe("mobile model options", () => {
         key: "opencode_proxy:gpt-5.6-sol",
         providerLabel: "OpenCode Proxy",
         providerDriver: "opencode",
+        subtitle: "conn1",
         capabilities: null,
       });
     });

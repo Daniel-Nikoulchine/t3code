@@ -61,6 +61,14 @@ describe("ModelBackendConnectionId", () => {
 });
 
 describe("ModelProxyConfig", () => {
+  it("preserves a Codex OAuth account reference without storing its token", () => {
+    const decoded = decodeModelProxyConfig({
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      codexAccountInstanceId: "codex-work",
+      models: ["gpt-5.6-luna"],
+    });
+    expect(decoded).toHaveProperty("codexAccountInstanceId", "codex-work");
+  });
   it("decodes a global proxy with baseUrl", () => {
     const decoded = decodeModelProxyConfig({
       baseUrl: "http://127.0.0.1:20128/v1",

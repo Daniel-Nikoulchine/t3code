@@ -310,10 +310,9 @@ function ThreadRouteContent(
             ...selectedThread,
             modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
             runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
-            interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
           }
         : null,
-    [composer.interactionMode, composer.modelSelection, composer.runtimeMode, selectedThread],
+    [composer.modelSelection, composer.runtimeMode, selectedThread],
   );
 
   /* ─── Native header theming ──────────────────────────────────────── */
@@ -916,7 +915,6 @@ function ThreadRouteContent(
           onReconnectEnvironment={handleReconnectEnvironment}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}
           onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
-          onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
           onRespondToApproval={requests.onRespondToApproval}
           onSelectUserInputOption={requests.onSelectUserInputOption}
           onChangeUserInputCustomAnswer={requests.onChangeUserInputCustomAnswer}

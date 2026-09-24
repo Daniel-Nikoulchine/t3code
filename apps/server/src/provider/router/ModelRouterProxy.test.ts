@@ -8,7 +8,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { ModelBackendConnections, ModelCredentials, ModelRouterRoutes } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { FetchHttpClient } from "effect/unstable/http";
 import * as NodeHttp from "node:http";
 
@@ -69,6 +73,11 @@ const makeProxyLayer = (input: {
   readonly routes: unknown;
   readonly connections: unknown;
   readonly credentials?: unknown;
+  readonly providerInstances?: Record<
+    string,
+    { readonly driver: string; readonly config?: unknown }
+  >;
+  readonly spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
 }) =>
   modelRouterProxyLayer({ port: 0 }).pipe(
     Layer.provide(
@@ -79,11 +88,83 @@ const makeProxyLayer = (input: {
           ...(input.credentials === undefined
             ? {}
             : { modelCredentials: decodeCredentials(input.credentials) }),
+          ...(input.providerInstances === undefined
+            ? {}
+            : { providerInstances: input.providerInstances }),
         }),
         FetchHttpClient.layer,
+        // Non-OAuth tests never spawn; a die-on-use spawner keeps the layer
+        // buildable without masking real mints (the OAuth test passes its own).
+        Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          input.spawner ?? ChildProcessSpawner.make(() => Effect.die("no spawn in this test")),
+        ),
       ),
     ),
   );
+
+// ── fake `codex app-server` that mints one fixed OAuth token ─────────────────
+
+const accountToken =
+  "header." +
+  Buffer.from(
+    JSON.stringify({
+      email: "dev@example.com",
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct-123" },
+    }),
+  )
+    .toString("base64url")
+    .replace(/=+$/, "") +
+  ".sig";
+
+const decodeRequestLine = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
+      method: Schema.String,
+      params: Schema.optionalKey(Schema.Unknown),
+    }),
+  ),
+);
+const encodeResponseLine = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+const makeAuthSpawner = Effect.fn("makeAuthSpawner")(function* () {
+  const output = yield* Queue.unbounded<Uint8Array>();
+  const handle = ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.never,
+    isRunning: Effect.succeed(true),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.forEach((bytes: Uint8Array) =>
+      Effect.gen(function* () {
+        for (const line of new TextDecoder().decode(bytes).trim().split("\n")) {
+          const request = decodeRequestLine(line);
+          if (request.id === undefined) continue;
+          const result =
+            request.method === "initialize"
+              ? {
+                  userAgent: "test-codex",
+                  codexHome: "/tmp/codex-test",
+                  platformFamily: "unix",
+                  platformOs: "linux",
+                }
+              : { authMethod: "chatgpt", authToken: accountToken, requiresOpenaiAuth: true };
+          yield* Queue.offer(
+            output,
+            new TextEncoder().encode(`${encodeResponseLine({ id: request.id, result })}\n`),
+          );
+        }
+      }),
+    ),
+    stdout: Stream.fromQueue(output),
+    stderr: Stream.empty,
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+  return ChildProcessSpawner.make(() => Effect.succeed(handle));
+});
 
 const post = (url: string, body: unknown, headers: Record<string, string> = {}) =>
   Effect.promise(() =>
@@ -102,6 +183,387 @@ const get = (url: string) =>
   );
 
 describe("ModelRouterProxy", () => {
+  it.effect("codex-oauth mints a bearer per request and relays Responses SSE", () =>
+    Effect.gen(function* () {
+      const events =
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-oauth","status":"completed"}}\n\n';
+      const stub = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          startStubUpstream((res) => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.end(events);
+          }),
+        ),
+        (upstream) => Effect.promise(() => upstream.close()),
+      );
+      const spawner = yield* makeAuthSpawner();
+      const context = yield* Layer.build(
+        makeProxyLayer({
+          routes: {
+            alias: {
+              target: { kind: "connection", connectionId: "oauth" },
+              upstreamModel: "upstream-luna",
+            },
+          },
+          connections: { oauth: { baseUrl: stub.origin, codexAccountInstanceId: "codex" } },
+          providerInstances: { codex: { driver: "codex", config: { binaryPath: "codex" } } },
+          spawner,
+        }),
+      );
+      const router = yield* ModelRouterProxy.pipe(Effect.provideContext(context));
+
+      const response = yield* post(`${router.baseUrl}/responses`, {
+        model: "alias",
+        input: [{ role: "user", content: "hi" }],
+        stream: true,
+      });
+      expect(response.status).toBe(200);
+      expect(response.text).toBe(events);
+
+      expect(stub.requests).toHaveLength(1);
+      const upstream = stub.requests[0]!;
+      expect(upstream.url).toBe("/responses");
+      // The minted login travels upstream, renamed to the upstream slug.
+      expect(upstream.headers["authorization"]).toBe(`Bearer ${accountToken}`);
+      expect(upstream.headers["chatgpt-account-id"]).toBe("acct-123");
+      expect(upstream.headers["content-type"]).toBe("application/json");
+      expect(JSON.parse(upstream.body)).toMatchObject({ model: "upstream-luna", stream: true });
+    }),
+  );
+  it.effect("codex-oauth forces streaming upstream and answers a non-streaming harness once", () =>
+    Effect.gen(function* () {
+      const events =
+        'event: response.created\ndata: {"type":"response.created"}\n\nevent: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-once","status":"completed","output":[]}}\n\n';
+      const stub = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          startStubUpstream((res) => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.end(events);
+          }),
+        ),
+        (upstream) => Effect.promise(() => upstream.close()),
+      );
+      const spawner = yield* makeAuthSpawner();
+      const context = yield* Layer.build(
+        makeProxyLayer({
+          routes: { alias: { target: { kind: "connection", connectionId: "oauth" } } },
+          connections: { oauth: { baseUrl: stub.origin, codexAccountInstanceId: "codex" } },
+          providerInstances: { codex: { driver: "codex", config: { binaryPath: "codex" } } },
+          spawner,
+        }),
+      );
+      const router = yield* ModelRouterProxy.pipe(Effect.provideContext(context));
+
+      // The harness asked once; the ChatGPT backend only streams.
+      const response = yield* post(`${router.baseUrl}/responses`, {
+        model: "alias",
+        input: [{ role: "user", content: "hi" }],
+        stream: false,
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.text)).toEqual({
+        id: "resp-once",
+        status: "completed",
+        output: [],
+      });
+
+      expect(stub.requests).toHaveLength(1);
+      expect(JSON.parse(stub.requests[0]!.body)).toMatchObject({ model: "alias", stream: true });
+    }),
+  );
+  it.effect("codex-oauth translates chat completions to Responses and answers JSON", () =>
+    Effect.gen(function* () {
+      // Recorded shapes from chatgpt.com/backend-api/codex (ids shortened).
+      const events = [
+        "event: response.created",
+        'data: {"type":"response.created","response":{"id":"resp_t"}}',
+        "",
+        "event: response.output_item.added",
+        'data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_t","type":"function_call","status":"in_progress","arguments":"","call_id":"call_t","name":"greet"}}',
+        "",
+        "event: response.function_call_arguments.delta",
+        'data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\\"name\\":"}',
+        "",
+        "event: response.function_call_arguments.done",
+        'data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\\"name\\":\\"Ada\\"}","item_id":"fc_t"}',
+        "",
+        "event: response.output_item.done",
+        'data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_t","type":"function_call","status":"completed","arguments":"{\\"name\\":\\"Ada\\"}","call_id":"call_t","name":"greet"}}',
+        "",
+        "event: response.completed",
+        'data: {"type":"response.completed","response":{"id":"resp_t","object":"response","created_at":1789683892,"status":"completed","model":"upstream-luna","output":[],"usage":{"input_tokens":51,"output_tokens":18,"total_tokens":69}}}',
+        "",
+      ].join("\n");
+      const stub = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          startStubUpstream((res, request) => {
+            const url = request.url ?? "";
+            if (url !== "/responses") {
+              res.writeHead(404, { "content-type": "application/json" });
+              res.end('{"detail":"Not Found"}');
+              return;
+            }
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.end(events);
+          }),
+        ),
+        (upstream) => Effect.promise(() => upstream.close()),
+      );
+      const spawner = yield* makeAuthSpawner();
+      const context = yield* Layer.build(
+        makeProxyLayer({
+          routes: {
+            alias: {
+              target: { kind: "connection", connectionId: "oauth" },
+              upstreamModel: "upstream-luna",
+            },
+          },
+          connections: { oauth: { baseUrl: stub.origin, codexAccountInstanceId: "codex" } },
+          providerInstances: { codex: { driver: "codex", config: { binaryPath: "codex" } } },
+          spawner,
+        }),
+      );
+      const router = yield* ModelRouterProxy.pipe(Effect.provideContext(context));
+
+      const response = yield* post(`${router.baseUrl}/v1/chat/completions`, {
+        model: "alias",
+        messages: [{ role: "user", content: "Call greet with Ada." }],
+        tools: [{ type: "function", function: { name: "greet", parameters: { type: "object" } } }],
+        stream: false,
+      });
+      expect(response.status).toBe(200);
+      const completion = JSON.parse(response.text) as {
+        choices: Array<{
+          message: { content: null; tool_calls: Array<unknown> };
+          finish_reason: string;
+        }>;
+        usage: unknown;
+      };
+      expect(completion.choices[0]?.finish_reason).toBe("tool_calls");
+      expect(completion.choices[0]?.message.tool_calls).toEqual([
+        {
+          id: "call_t",
+          type: "function",
+          function: { name: "greet", arguments: '{"name":"Ada"}' },
+        },
+      ]);
+      expect(completion.usage).toEqual({
+        prompt_tokens: 51,
+        completion_tokens: 18,
+        total_tokens: 69,
+      });
+
+      expect(stub.requests).toHaveLength(1);
+      const upstream = stub.requests[0]!;
+      expect(upstream.url).toBe("/responses");
+      expect(upstream.headers["authorization"]).toBe(`Bearer ${accountToken}`);
+      const sent = JSON.parse(upstream.body) as Record<string, unknown>;
+      expect(sent).toMatchObject({ model: "upstream-luna", stream: true, store: false });
+      expect(sent.input).toBeDefined();
+      expect(sent.tools).toBeDefined();
+    }),
+  );
+
+  it.effect(
+    "upstreamResponses routes translate chat completions to Responses and answer JSON",
+    () =>
+      Effect.gen(function* () {
+        const events = [
+          "event: response.output_item.done",
+          'data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_t","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hi","annotations":[]}]}}',
+          "",
+          "event: response.completed",
+          'data: {"type":"response.completed","response":{"id":"resp_t","object":"response","created_at":1789751900,"status":"completed","model":"upstream-model","output":[{"id":"msg_t","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hi","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}',
+          "",
+        ].join("\n");
+        const stub = yield* Effect.acquireRelease(
+          Effect.promise(() =>
+            startStubUpstream((res, request) => {
+              if ((request.url ?? "") !== "/responses") {
+                res.writeHead(404, { "content-type": "application/json" });
+                res.end('{"detail":"Not Found"}');
+                return;
+              }
+              res.writeHead(200, { "content-type": "text/event-stream" });
+              res.end(events);
+            }),
+          ),
+          (upstream) => Effect.promise(() => upstream.close()),
+        );
+        const context = yield* Layer.build(
+          makeProxyLayer({
+            routes: {
+              alias: {
+                target: { kind: "connection", connectionId: "stub" },
+                upstreamModel: "upstream-model",
+                upstreamResponses: true,
+              },
+            },
+            connections: { stub: { baseUrl: stub.origin } },
+          }),
+        );
+        const router = yield* ModelRouterProxy.pipe(Effect.provideContext(context));
+
+        const response = yield* post(`${router.baseUrl}/openai/v1/chat/completions`, {
+          model: "alias",
+          messages: [{ role: "user", content: "hi" }],
+          stream: false,
+        });
+        expect(response.status).toBe(200);
+        const completion = JSON.parse(response.text) as {
+          choices: Array<{ message: { content: string }; finish_reason: string }>;
+        };
+        expect(completion.choices[0]?.message.content).toBe("hi");
+        expect(completion.choices[0]?.finish_reason).toBe("stop");
+
+        expect(stub.requests).toHaveLength(1);
+        const upstream = stub.requests[0]!;
+        expect(upstream.url).toBe("/responses");
+        const sent = JSON.parse(upstream.body) as Record<string, unknown>;
+        expect(sent).toMatchObject({ model: "upstream-model", stream: true });
+        expect(sent.input).toBeDefined();
+        expect(sent.messages).toBeUndefined();
+      }),
+  );
+
+  it.effect("codex-oauth streams chat completions chunks from Responses SSE", () =>
+    Effect.gen(function* () {
+      const events = [
+        "event: response.created",
+        'data: {"type":"response.created","response":{"id":"resp_x"}}',
+        "",
+        "event: response.output_text.delta",
+        'data: {"type":"response.output_text.delta","delta":"OK"}',
+        "",
+        "event: response.completed",
+        'data: {"type":"response.completed","response":{"id":"resp_x","status":"completed","model":"upstream-luna","output":[],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}',
+        "",
+      ].join("\n");
+      const stub = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          startStubUpstream((res) => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.end(events);
+          }),
+        ),
+        (upstream) => Effect.promise(() => upstream.close()),
+      );
+      const spawner = yield* makeAuthSpawner();
+      const context = yield* Layer.build(
+        makeProxyLayer({
+          routes: { alias: { target: { kind: "connection", connectionId: "oauth" } } },
+          connections: { oauth: { baseUrl: stub.origin, codexAccountInstanceId: "codex" } },
+          providerInstances: { codex: { driver: "codex", config: { binaryPath: "codex" } } },
+          spawner,
+        }),
+      );
+      const router = yield* ModelRouterProxy.pipe(Effect.provideContext(context));
+
+      const response = yield* post(`${router.baseUrl}/v1/chat/completions`, {
+        model: "alias",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      });
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('"content":"OK"');
+      expect(response.text).toContain("chat.completion.chunk");
+      expect(response.text.trimEnd().endsWith("data: [DONE]")).toBe(true);
+    }),
+  );
+
+  it.effect("codex-oauth translates anthropic messages through to Responses", () =>
+    Effect.gen(function* () {
+      const events = [
+        "event: response.created",
+        'data: {"type":"response.created","response":{"id":"resp_x"}}',
+        "",
+        "event: response.output_text.delta",
+        'data: {"type":"response.output_text.delta","delta":"OK"}',
+        "",
+        "event: response.completed",
+        'data: {"type":"response.completed","response":{"id":"resp_x","status":"completed","model":"upstream-luna","output":[{"id":"msg_x","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"OK","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}',
+        "",
+      ].join("\n");
+      const stub = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          startStubUpstream((res) => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.end(events);
+          }),
+        ),
+        (upstream) => Effect.promise(() => upstream.close()),
+      );
+      const spawner = yield* makeAuthSpawner();
+      const context = yield* Layer.build(
+        makeProxyLayer({
+          routes: { alias: { target: { kind: "connection", connectionId: "oauth" } } },
+          connections: { oauth: { baseUrl: stub.origin, codexAccountInstanceId: "codex" } },
+          providerInstances: { codex: { driver: "codex", config: { binaryPath: "codex" } } },
+          spawner,
+        }),
+      );
+      const router = yield* ModelRouterProxy.pipe(Effect.provideContext(context));
+
+      const response = yield* post(`${router.baseUrl}/anthropic/v1/messages`, {
+        model: "alias",
+        max_tokens: 16,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.text)).toMatchObject({
+        type: "message",
+        content: [{ type: "text", text: "OK" }],
+        stop_reason: "end_turn",
+      });
+
+      const sent = JSON.parse(stub.requests[0]!.body) as Record<string, unknown>;
+      expect(sent).toMatchObject({ model: "alias", stream: true });
+      expect(sent.input).toBeDefined();
+    }),
+  );
+  it.effect("relays Responses requests and SSE without converting them to Chat Completions", () =>
+    Effect.gen(function* () {
+      const events =
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp-test","status":"completed"}}\n\n';
+      const stub = yield* Effect.acquireRelease(
+        Effect.promise(() =>
+          startStubUpstream((res) => {
+            res.writeHead(200, { "content-type": "text/event-stream" });
+            res.end(events);
+          }),
+        ),
+        (upstream) => Effect.promise(() => upstream.close()),
+      );
+      const context = yield* Layer.build(
+        makeProxyLayer({
+          routes: {
+            alias: {
+              target: { kind: "connection", connectionId: "stub" },
+              upstreamModel: "upstream-model",
+            },
+          },
+          connections: { stub: { baseUrl: stub.origin, protocols: ["openai"] } },
+        }),
+      );
+      const router = yield* ModelRouterProxy.pipe(Effect.provideContext(context));
+      const body = { model: "alias", input: [{ role: "user", content: "hi" }], stream: true };
+      for (const path of [
+        "/responses",
+        "/v1/responses",
+        "/openai/responses",
+        "/openai/v1/responses",
+      ]) {
+        const response = yield* post(`${router.baseUrl}${path}`, body);
+        expect(response.status).toBe(200);
+        expect(response.text).toBe(events);
+      }
+      expect(stub.requests).toHaveLength(4);
+      for (const request of stub.requests) {
+        expect(request.url).toBe("/responses");
+        expect(JSON.parse(request.body)).toEqual({ ...body, model: "upstream-model" });
+      }
+    }),
+  );
   it.effect("same-protocol pass-through preserves the body bytes and substitutes auth", () =>
     Effect.gen(function* () {
       const stub = yield* Effect.acquireRelease(
@@ -143,6 +605,8 @@ describe("ModelRouterProxy", () => {
       expect(upstream.body).toBe(JSON.stringify(sent));
       expect(upstream.headers["authorization"]).toBe("Bearer sk-stub-123");
       expect(upstream.headers["anthropic-version"]).toBeUndefined();
+      // No session header leaks to non-Go upstreams.
+      expect(upstream.headers["x-opencode-session"]).toBeUndefined();
       // The harness's own credentials never travel upstream; the proxy
       // substitutes the route's resolved key instead.
       expect(upstream.body).not.toContain("Bearer");

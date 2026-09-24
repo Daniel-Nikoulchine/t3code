@@ -2,6 +2,7 @@ import * as NodeOS from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -92,4 +93,50 @@ it.layer(NodeServices.layer)("DroidSkills", (it) => {
       "run /summarize-diff and $unknown",
     );
   });
+
+  it.effect.skipIf(!symlinksSupported)(
+    "reads a linked skill library without walking the target tree",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fileSystem.makeTempDirectory({
+          directory: NodeOS.tmpdir(),
+          prefix: "droid-skills-boundary-home-",
+        });
+        const project = yield* fileSystem.makeTempDirectory({
+          directory: NodeOS.tmpdir(),
+          prefix: "droid-skills-boundary-project-",
+        });
+        const library = yield* fileSystem.makeTempDirectory({
+          directory: NodeOS.tmpdir(),
+          prefix: "droid-skills-boundary-library-",
+        });
+        const nested = path.join(library, "nested");
+        yield* fileSystem.makeDirectory(nested, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(library, "SKILL.md"),
+          "---\nname: linked-lib\ndescription: Linked skill library.\n---\n",
+        );
+        yield* fileSystem.writeFileString(
+          path.join(nested, "SKILL.md"),
+          "---\nname: nested-escape\ndescription: Must stay out.\n---\n",
+        );
+        const linkParent = path.join(project, ".factory", "skills");
+        yield* fileSystem.makeDirectory(linkParent, { recursive: true });
+        yield* fileSystem.symlink(library, path.join(linkParent, "linked"));
+
+        const skills = yield* discoverDroidSkills(project, { HOME: home });
+        assert.deepStrictEqual(skills, [
+          {
+            name: "linked",
+            path: path.join(linkParent, "linked", "SKILL.md"),
+            scope: "project",
+            enabled: true,
+            displayName: "linked-lib",
+            description: "Linked skill library.",
+          },
+        ]);
+      }),
+  );
 });

@@ -105,7 +105,9 @@ export function upsertProviderWorkspaceSnapshot(
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
   const isCodex = provider.driver === ProviderDriverKind.make("codex");
-  if (!isAntigravity && !isCodex && provider.driver !== ProviderDriverKind.make("opencode")) {
+  const isOpencode = provider.driver === ProviderDriverKind.make("opencode");
+  const isMinimax = provider.driver === ProviderDriverKind.make("minimax");
+  if (!isAntigravity && !isCodex && !isOpencode && !isMinimax) {
     return true;
   }
 

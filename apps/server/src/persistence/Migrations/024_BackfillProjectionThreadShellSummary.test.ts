@@ -22,7 +22,6 @@ layer("024_BackfillProjectionThreadShellSummary", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
@@ -32,7 +31,6 @@ layer("024_BackfillProjectionThreadShellSummary", (it) => {
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           deleted_at
         )
         VALUES (
@@ -128,30 +126,6 @@ layer("024_BackfillProjectionThreadShellSummary", (it) => {
             '2026-02-24T00:04:00.000Z'
           )
       `;
-
-      yield* sql`
-        INSERT INTO projection_thread_proposed_plans (
-          plan_id,
-          thread_id,
-          turn_id,
-          plan_markdown,
-          implemented_at,
-          implementation_thread_id,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          'plan-1',
-          'thread-1',
-          'turn-1',
-          '# Do the thing',
-          NULL,
-          NULL,
-          '2026-02-24T00:05:00.000Z',
-          '2026-02-24T00:05:00.000Z'
-        )
-      `;
-
       yield* sql`
         INSERT INTO projection_pending_approvals (
           request_id,
@@ -179,13 +153,11 @@ layer("024_BackfillProjectionThreadShellSummary", (it) => {
         readonly latestUserMessageAt: string | null;
         readonly pendingApprovalCount: number;
         readonly pendingUserInputCount: number;
-        readonly hasActionableProposedPlan: number;
       }>`
         SELECT
           latest_user_message_at AS "latestUserMessageAt",
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
-          has_actionable_proposed_plan AS "hasActionableProposedPlan"
         FROM projection_threads
         WHERE thread_id = 'thread-1'
       `;
@@ -194,7 +166,6 @@ layer("024_BackfillProjectionThreadShellSummary", (it) => {
           latestUserMessageAt: "2026-02-24T00:01:00.000Z",
           pendingApprovalCount: 0,
           pendingUserInputCount: 1,
-          hasActionableProposedPlan: 1,
         },
       ]);
 

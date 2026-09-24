@@ -42,7 +42,7 @@ describe("deriveActiveWorkStartedAt", () => {
             startedAt: null,
             completedAt: null,
           },
-          { orchestrationStatus: "running", activeTurnId: "new" },
+          { status: "running", activeTurnId: "new" },
           sendStartedAt,
         ),
       ).toBe(sendStartedAt);
@@ -58,7 +58,7 @@ describe("deriveActiveWorkStartedAt", () => {
           startedAt: null,
           completedAt: "2026-09-06T23:33:05.000Z",
         },
-        { orchestrationStatus: "error", activeTurnId: null },
+        { status: "error", activeTurnId: null },
         null,
       ),
     ).toBeNull();
@@ -77,7 +77,7 @@ describe("deriveActiveWorkStartedAt", () => {
           startedAt: null,
           completedAt: null,
         },
-        { orchestrationStatus: "starting", activeTurnId: null },
+        { status: "starting", activeTurnId: null },
         null,
       ),
     ).toBe("2026-09-06T23:33:00.000Z");
@@ -92,7 +92,7 @@ describe("deriveActiveWorkStartedAt", () => {
           startedAt: "2026-09-06T23:33:05.000Z",
           completedAt: null,
         },
-        { orchestrationStatus: "running", activeTurnId: "turn-1" },
+        { status: "running", activeTurnId: "turn-1" },
         null,
       ),
     ).toBe("2026-09-06T23:33:05.000Z");
@@ -108,7 +108,7 @@ describe("deriveActiveWorkStartedAt", () => {
           startedAt: "2026-09-06T23:33:05.000Z",
           completedAt: "2026-09-06T23:33:09.000Z",
         },
-        { orchestrationStatus: "idle", activeTurnId: null },
+        { status: "idle", activeTurnId: null },
         null,
       ),
     ).toBeNull();
@@ -124,7 +124,7 @@ describe("deriveActiveWorkStartedAt", () => {
           startedAt: "2026-09-06T23:33:05.000Z",
           completedAt: "2026-09-06T23:33:09.000Z",
         },
-        { orchestrationStatus: "starting", activeTurnId: null },
+        { status: "starting", activeTurnId: null },
         null,
       ),
     ).toBeNull();

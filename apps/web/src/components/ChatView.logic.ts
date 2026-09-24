@@ -9,7 +9,6 @@ import {
   type MessageId,
   type ModelSelection,
   type PreviewAnnotationPayload,
-  type ProviderInteractionMode,
   ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
@@ -49,7 +48,7 @@ import { environmentThreadDetails } from "../state/threads";
 import { stripInlineContextReferences } from "~/lib/composerContextReferences";
 import { filterTerminalContextsWithText, type TerminalContextDraft } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
-import { collapseExpandedComposerCursor, type ComposerSubmissionIntent } from "../composer-logic";
+import type { ComposerSubmissionIntent } from "../composer-logic";
 import type { ReviewCommentContext } from "../reviewCommentContext";
 import type { TimelineEntry } from "../session-logic";
 import type { PreviewMiniPlayerSource } from "../previewMiniPlayerStore";
@@ -534,7 +533,6 @@ export function buildLocalDraftThread(
     title: "New thread",
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
-    interactionMode: draftThread.interactionMode,
     session: null,
     messages: [],
     createdAt: draftThread.createdAt,
@@ -549,19 +547,17 @@ export function buildLocalDraftThread(
     checkpoints: [],
     pullRequests: [],
     activities: [],
-    proposedPlans: [],
-  };
+  } as Thread;
 }
 
 export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
   return {
     ...shell,
     messages: [],
-    proposedPlans: [],
     activities: [],
     checkpoints: [],
     deletedAt: null,
-  };
+  } as Thread;
 }
 
 export function shouldWriteThreadErrorToCurrentServerThread(input: {
@@ -647,22 +643,6 @@ export function resolveComposerProviderSelection(input: {
     requestedDriverKind,
     lockedContinuationGroupKey,
     unavailableProviderInstanceId,
-  };
-}
-
-/** Keep restored drafts and every plan control on the selected instance's supported mode. */
-export function resolveComposerInteractionMode(input: {
-  planModeEnabled: boolean;
-  provider: Pick<ServerProvider, "showInteractionModeToggle"> | null | undefined;
-  interactionMode: ProviderInteractionMode;
-}): { enabled: boolean; interactionMode: ProviderInteractionMode } {
-  const enabled =
-    input.planModeEnabled &&
-    input.provider != null &&
-    input.provider.showInteractionModeToggle !== false;
-  return {
-    enabled,
-    interactionMode: enabled ? input.interactionMode : "default",
   };
 }
 
@@ -1002,22 +982,6 @@ export function shouldShowBranchMismatchBanner(input: {
     return false;
   }
   return input.composerHasContent || input.wasShownForCurrentMismatch;
-}
-
-export function shouldShowPlanFollowUpPrompt(input: {
-  pendingUserInputCount: number;
-  interactionMode: ProviderInteractionMode;
-  latestTurnSettled: boolean;
-  hasActionableProposedPlan: boolean;
-  hasComposerAttachments: boolean;
-}): boolean {
-  return (
-    input.pendingUserInputCount === 0 &&
-    input.interactionMode === "plan" &&
-    input.latestTurnSettled &&
-    input.hasActionableProposedPlan &&
-    !input.hasComposerAttachments
-  );
 }
 
 // Session-scoped (module-level so it survives ChatView remounts, e.g. route
@@ -1420,39 +1384,4 @@ export function shouldRefocusComposerOnWindowFocus(
       '[role="dialog"], [role="alertdialog"], [data-slot$="-popup"], [data-terminal-owner]',
     ) === null
   );
-}
-
-export interface PlanFollowUpComposerSnapshot {
-  readonly prompt: string;
-  readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
-  readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
-  readonly previewAnnotations: ReadonlyArray<PreviewAnnotationPayload>;
-}
-
-/**
- * Puts back everything a plan follow-up send cleared when the send fails. The
- * caller clears the composer before awaiting the send, so every field it held
- * has to be written back here: a dropped field silently discards user context.
- */
-export function restorePlanFollowUpComposer(input: {
-  readonly snapshot: PlanFollowUpComposerSnapshot;
-  readonly writePrompt: (prompt: string) => void;
-  readonly writeTerminalContexts: (contexts: ReadonlyArray<TerminalContextDraft>) => void;
-  readonly writeReviewComments: (comments: ReadonlyArray<ReviewCommentContext>) => void;
-  readonly writePreviewAnnotations: (annotations: ReadonlyArray<PreviewAnnotationPayload>) => void;
-  readonly resetCursor: (options: {
-    cursor: number;
-    prompt: string;
-    detectTrigger: boolean;
-  }) => void;
-}): void {
-  input.writePrompt(input.snapshot.prompt);
-  input.writeTerminalContexts(input.snapshot.terminalContexts);
-  input.writeReviewComments(input.snapshot.reviewComments);
-  input.writePreviewAnnotations(input.snapshot.previewAnnotations);
-  input.resetCursor({
-    cursor: collapseExpandedComposerCursor(input.snapshot.prompt, input.snapshot.prompt.length),
-    prompt: input.snapshot.prompt,
-    detectTrigger: true,
-  });
 }

@@ -6,7 +6,7 @@
  * closures captured over the per-instance `ClaudeSettings`.
  *
  * Unlike Codex, the Claude snapshot probe may invoke a secondary probe
- * (`probeClaudeCapabilities`) to read Anthropic account + slash-command
+ * (`probeClaudeCapabilities`) to read Claude account + slash-command
  * metadata. That probe is per-instance and keyed by binary + resolved HOME so
  * two concurrent Claude instances don't cross-contaminate account metadata.
  *
@@ -29,6 +29,7 @@ import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { makeCliLoginAuthController, claudeLoginRecipe } from "../cliLoginAuth.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
 import { makeClaudeScopedLimitNames } from "../Layers/claudeUsageLimits.ts";
 import {
@@ -46,14 +47,13 @@ import {
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
+import { DEFAULT_BACKEND_PROTOCOLS, isUsableBackend } from "../ModelBackendEnvironment.ts";
+import { resolveHarnessBaseEnv, resolveHarnessProcessEnv } from "../harnessMaterial.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
   normalizeCommandPath,
-  resolveProviderMaintenanceCapabilitiesEffect,
+  resolveDriverMaintenance,
 } from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -105,7 +105,16 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
   },
   configSchema: ClaudeSettings,
   defaultConfig: (): ClaudeSettings => decodeClaudeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -120,21 +129,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       // the backend overlay (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY) reaches the
       // harness by merging it here. Without a backend the overlay is empty and
       // subscription mode is untouched.
-      const processEnv = {
-        ...mergeProviderInstanceEnvironment(environment),
-        ...resolveModelBackendEnvironment(backend, process.env),
-      };
+      const processEnv = resolveHarnessProcessEnv({
+        environment,
+        backend,
+        baseEnv: process.env,
+      }).processEnv;
       // Only an endpoint speaking the Anthropic wire protocol can serve this
       // driver; the env overlay already refuses ANTHROPIC_* for the rest.
       // Connection models ride the custom-model path: providerModelsFromSettings
       // appends them to the snapshot list and the adapter's catalog scoping
       // leaves capability-less entries alone.
-      const backendModels =
-        backend === undefined || backend.kind === "native"
-          ? []
-          : (backend.protocols ?? ["openai", "anthropic"]).includes("anthropic")
-            ? (backend.models ?? [])
-            : [];
+      const backendModels = !isUsableBackend(backend)
+        ? []
+        : (backend.protocols ?? DEFAULT_BACKEND_PROTOCOLS).includes("anthropic")
+          ? (backend.models ?? [])
+          : [];
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -147,16 +156,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           ? { customModels: [...config.customModels, ...backendModels] }
           : {}),
       } satisfies ClaudeSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
       const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig);
       const stampIdentity = withInstanceIdentity({
         instanceId,
@@ -164,7 +168,8 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey,
-        ...(backend === undefined ? {} : { backend }),
+        backend,
+        nativeFallback,
       });
 
       // One per instance: the status probe writes the model-scoped bucket
@@ -280,6 +285,18 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         snapshotForCwd,
         adapter,
         textGeneration,
+        auth: yield* makeCliLoginAuthController({
+          instanceId,
+          recipe: claudeLoginRecipe,
+          command: effectiveConfig.binaryPath || claudeLoginRecipe.defaultCommand,
+          // Sign-in always talks to the real vendor: the model-backend
+          // overlay in `processEnv` must not reroute the login itself.
+          env: { ...resolveHarnessBaseEnv(environment, process.env) },
+          // Login/logout changes what the SDK probe reports. Drop the TTL
+          // entry so the refresh triggered by the UI sees the new state
+          // immediately instead of the stale "Signed in" for up to 5 min.
+          onAuthChanged: Cache.invalidate(capabilitiesProbeCache, capabilitiesCacheKey),
+        }),
       } satisfies ProviderInstance;
     }),
 };

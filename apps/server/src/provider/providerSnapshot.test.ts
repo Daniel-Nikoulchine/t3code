@@ -92,6 +92,49 @@ describe("providerModelsFromSettings", () => {
     expect(models.map((model) => model.slug)).toEqual(["claude-opus-4-8", "opus"]);
     expect(models[1]?.isCustom).toBe(true);
   });
+
+  it("never surfaces the t3-backend harness bucket as subProvider", () => {
+    const capabilities = createModelCapabilities({ optionDescriptors: [] });
+    const models = providerModelsFromSettings(
+      [],
+      [
+        "t3-backend/gpt-5.6",
+        "t3-backend/opencode-go/kimi-k3",
+        "t3-backend/t3-backend/probe-go",
+        "anthropic/claude-opus-4-7",
+      ],
+      capabilities,
+    );
+
+    expect(
+      models.map(({ slug, name, subProvider, isCustom }) => ({
+        slug,
+        name,
+        subProvider,
+        isCustom,
+      })),
+    ).toEqual([
+      { slug: "t3-backend/gpt-5.6", name: "gpt-5.6", subProvider: undefined, isCustom: true },
+      {
+        slug: "t3-backend/opencode-go/kimi-k3",
+        name: "kimi-k3",
+        subProvider: "opencode-go",
+        isCustom: true,
+      },
+      {
+        slug: "t3-backend/t3-backend/probe-go",
+        name: "probe-go",
+        subProvider: undefined,
+        isCustom: true,
+      },
+      {
+        slug: "anthropic/claude-opus-4-7",
+        name: "anthropic/claude-opus-4-7",
+        subProvider: undefined,
+        isCustom: true,
+      },
+    ]);
+  });
 });
 
 describe("parseGenericCliVersion", () => {

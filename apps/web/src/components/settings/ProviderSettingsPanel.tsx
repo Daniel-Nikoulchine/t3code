@@ -1,6 +1,5 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
-import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
@@ -13,93 +12,47 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
-  resolveEnvironmentMachineKind,
   resolveProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
-import {
-  getBackgroundActivityPresetSettings,
-  resolveServerBackgroundActivitySettings,
-} from "@t3tools/shared/backgroundActivitySettings";
 import * as Arr from "effect/Array";
-import * as Duration from "effect/Duration";
 import * as Result from "effect/Result";
 import { PlusIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import {
   useEnvironmentSettings,
   useUpdateClientSettings,
   useUpdateEnvironmentSettings,
 } from "../../hooks/useSettings";
-import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { cn } from "../../lib/utils";
 import { resolveAppModelSelectionState } from "../../modelSelection";
-import {
-  useEnvironments,
-  usePrimaryEnvironmentId,
-  type EnvironmentPresentation,
-} from "../../state/environments";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { getRelativeTimeState } from "../../timestampFormat";
-import {
-  ConnectionStatusDot,
-  connectionPhaseDotClassName,
-  connectionPhasePingClassName,
-} from "../ConnectionStatusDot";
 import {
   isProviderSettingsUpdateCandidate,
   isProviderUpdateActive,
   type ProviderSettingsUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { Button } from "../ui/button";
-import {
-  NumberField,
-  NumberFieldDecrement,
-  NumberFieldGroup,
-  NumberFieldIncrement,
-  NumberFieldInput,
-} from "../ui/number-field";
 import { ScrollArea } from "../ui/scroll-area";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
-import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { getDriverOption } from "./providerDriverMeta";
 import { searchableSetting } from "./settingsSearch";
 import { buildProviderInstanceRows, type ProviderInstanceRow } from "./providerInstanceRows";
+import { buildProviderInstanceUpdatePatch } from "./SettingsPanels.logic";
 import {
-  backgroundActivityOverrideSettings,
-  buildProviderInstanceUpdatePatch,
-  durationToSeconds,
-  normalizeIntervalSeconds,
-  PROVIDER_HEALTH_INTERVAL_STEP_SECONDS,
-} from "./SettingsPanels.logic";
-import {
-  PolicyTooltip,
   SettingResetButton,
-  SettingsPageContainer,
   SettingsRow,
   SettingsSection,
   useRelativeTimeTick,
-  useSettingsSearchTargetId,
 } from "./settingsLayout";
-import {
-  buildProviderEnvironmentOptions,
-  isProviderSettingsEnvironmentAvailable,
-  resolveSelectedProviderEnvironmentId,
-} from "./ProviderSettingsPanel.logic";
-import {
-  providerCardClassName,
-  providerCardHeightClassName,
-  ProviderSettingsPlaceholder,
-  SelectedEnvironmentProviderSettings,
-} from "./providerSettingsEnvironment";
+import { providerCardClassName, providerCardHeightClassName } from "./providerSettingsEnvironment";
 
 function withoutProviderInstanceKey<V>(
   record: Readonly<Record<ProviderInstanceId, V>> | undefined,
@@ -148,184 +101,13 @@ function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }
   );
 }
 
-function providerEnvironmentDetail(environment: EnvironmentPresentation): string {
-  if (environment.entry.target._tag === "PrimaryConnectionTarget") return "Primary device";
-  if (environment.relayManaged) return "T3 Connect";
-  if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
-  if (isDesktopLocalConnectionTarget(environment.entry.target)) return "Local device";
-  return environment.displayUrl ?? "Remote device";
-}
-
-interface ProviderSettingsTarget {
-  readonly environmentId?: EnvironmentId;
-  readonly instanceId?: ProviderInstanceId;
-  readonly scoped?: boolean;
-}
-
-export function ProviderSettingsPanel(target: ProviderSettingsTarget) {
-  return (
-    <SettingsPageContainer width="wide" className="gap-8">
-      <ProviderSettingsPanelContent
-        key={`${target.environmentId ?? ""}:${target.instanceId ?? ""}`}
-        {...target}
-      />
-    </SettingsPageContainer>
-  );
-}
-
-function ProviderSettingsPanelContent(target: ProviderSettingsTarget) {
-  const { environments, isReady } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const searchTargetId = useSettingsSearchTargetId();
-  const options = useMemo(
-    () => buildProviderEnvironmentOptions(environments, primaryEnvironmentId),
-    [environments, primaryEnvironmentId],
-  );
-  // Raw user intent; the effective selection is re-derived every render so a
-  // device that drops out of the catalog falls back without erasing the pick —
-  // if it reappears (e.g. after a reconnect) the selection is restored.
-  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
-    target.environmentId ?? primaryEnvironmentId,
-  );
-  const targetEnvironmentMissing =
-    target.environmentId !== undefined &&
-    selectedEnvironmentId === target.environmentId &&
-    !options.some((environment) => environment.environmentId === target.environmentId);
-  const effectiveEnvironmentId =
-    target.scoped || targetEnvironmentMissing
-      ? target.environmentId
-      : resolveSelectedProviderEnvironmentId(options, selectedEnvironmentId, primaryEnvironmentId);
-  const selectedEnvironment =
-    options.find((environment) => environment.environmentId === effectiveEnvironmentId) ?? null;
-  const selectedEnvironmentCanRenderSettings =
-    selectedEnvironment !== null &&
-    isProviderSettingsEnvironmentAvailable({
-      connectionPhase: selectedEnvironment.connection.phase,
-      hasServerConfig: selectedEnvironment.serverConfig !== null,
-    });
-  const searchableEnvironmentId = options.find((environment) =>
-    isProviderSettingsEnvironmentAvailable({
-      connectionPhase: environment.connection.phase,
-      hasServerConfig: environment.serverConfig !== null,
-    }),
-  )?.environmentId;
-  useEffect(() => {
-    if (
-      !target.scoped &&
-      (searchTargetId === searchableSetting("provider-health-check-interval").id ||
-        searchTargetId === searchableSetting("usage-providers").id) &&
-      !selectedEnvironmentCanRenderSettings &&
-      searchableEnvironmentId !== undefined
-    ) {
-      setSelectedEnvironmentId(searchableEnvironmentId);
-    }
-  }, [
-    searchTargetId,
-    searchableEnvironmentId,
-    selectedEnvironmentCanRenderSettings,
-    target.scoped,
-  ]);
-  const onlyPrimaryDevice =
-    options.length === 1 && options[0]?.entry.target._tag === "PrimaryConnectionTarget";
-  const deviceTabs =
-    !target.scoped && !onlyPrimaryDevice && options.length > 0 ? (
-      <ScrollArea hideScrollbars scrollFade className="h-11 min-w-0 flex-1 rounded-none">
-        <ToggleGroup
-          aria-label="Devices"
-          variant="segmented"
-          className="my-2"
-          value={effectiveEnvironmentId ? [effectiveEnvironmentId] : []}
-          onValueChange={(next) => {
-            const environment = options.find((option) => option.environmentId === next[0]);
-            if (environment) setSelectedEnvironmentId(environment.environmentId);
-          }}
-        >
-          {options.map((environment) => {
-            const machine = resolveEnvironmentMachineKind(environment.serverConfig);
-            const detail = providerEnvironmentDetail(environment);
-            const statusText = connectionStatusTitle(environment.connection);
-            return (
-              <Tooltip key={environment.environmentId}>
-                <TooltipTrigger
-                  render={
-                    <Toggle value={environment.environmentId} className="gap-2 text-left">
-                      <EnvironmentMachineIcon
-                        kind={machine}
-                        className="size-3.5 shrink-0"
-                        aria-hidden
-                      />
-                      <span className="max-w-40 truncate">{environment.label}</span>
-                      {environment.connection.phase !== "connected" ? (
-                        <ConnectionStatusDot
-                          dotClassName={connectionPhaseDotClassName(environment.connection.phase)}
-                          pingClassName={connectionPhasePingClassName(environment.connection.phase)}
-                        />
-                      ) : null}
-                      <span className="sr-only">
-                        {detail}, {statusText}
-                      </span>
-                    </Toggle>
-                  }
-                />
-                <TooltipPopup side="top">
-                  {detail} · {statusText}
-                </TooltipPopup>
-              </Tooltip>
-            );
-          })}
-        </ToggleGroup>
-      </ScrollArea>
-    ) : null;
-
-  return (
-    <>
-      {targetEnvironmentMissing ? (
-        <ProviderSettingsPlaceholder
-          searchAnchorId="providers"
-          deviceTabs={deviceTabs}
-          icon={<EnvironmentMachineIcon kind={resolveEnvironmentMachineKind(null)} />}
-          title="Device unavailable"
-          description="Reconnect this device to set up its harness instance, or select another device."
-        />
-      ) : null}
-      {options.length === 0 && !targetEnvironmentMissing ? (
-        <ProviderSettingsPlaceholder
-          searchAnchorId="providers"
-          icon={<EnvironmentMachineIcon kind={resolveEnvironmentMachineKind(null)} />}
-          title={isReady ? "No connected devices" : "Loading devices"}
-          description={
-            isReady
-              ? "Connect an execution environment before configuring harness instances."
-              : "Reading connected execution environments."
-          }
-        />
-      ) : null}
-
-      {selectedEnvironment ? (
-        <SelectedEnvironmentProviderSettings
-          key={selectedEnvironment.environmentId}
-          environment={selectedEnvironment}
-          deviceTabs={deviceTabs}
-          targetInstanceId={
-            target.environmentId === undefined ||
-            selectedEnvironment.environmentId === target.environmentId
-              ? target.instanceId
-              : undefined
-          }
-          searchAnchorId="providers"
-          render={(gated) => <EnvironmentProviderSettings {...gated} />}
-        />
-      ) : null}
-    </>
-  );
-}
-
 export function EnvironmentProviderSettings({
   environmentId,
   environmentLabel,
   readOnly = false,
   deviceTabs,
   targetInstanceId,
+  headerLabel,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
@@ -338,11 +120,18 @@ export function EnvironmentProviderSettings({
    * and the health interval are inert so no write is offered and then rejected.
    */
   readonly readOnly?: boolean;
+  /**
+   * Label at the left of the header row above the card (e.g. "Harness").
+   * Absent the row starts with the device tabs.
+   */
+  readonly headerLabel?: string | undefined;
 }) {
   const settings = useEnvironmentSettings(environmentId);
   // Provider instances hold per-machine credentials and binaries, so this
   // page always edits exactly the environment it displays.
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
+  // Model favorites, hidden flags, and ordering are per-device client
+  // settings (they follow the user, not the environment).
   const updateClientSettings = useUpdateClientSettings();
   const serverProviders =
     useAtomValue(serverEnvironment.providersValueAtom(environmentId)) ?? EMPTY_SERVER_PROVIDERS;
@@ -374,14 +163,6 @@ export function EnvironmentProviderSettings({
   );
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
   const textGenInstanceId = textGenerationModelSelection.instanceId;
-  const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
-  const providerHealthPreset = getBackgroundActivityPresetSettings(
-    resolvedBackgroundActivity.profile,
-  ).providerHealthRefreshInterval;
-  const providerHealthRefreshIntervalSeconds = durationToSeconds(
-    resolvedBackgroundActivity.providerHealthRefreshInterval,
-  );
-  const defaultProviderHealthRefreshIntervalSeconds = durationToSeconds(providerHealthPreset);
   const lastCheckedAt =
     serverProviders.length > 0
       ? serverProviders.reduce(
@@ -454,8 +235,8 @@ export function EnvironmentProviderSettings({
     [environmentId, updateProvider],
   );
 
-  // Instance rows are shared with the backend-centric Providers tab
-  // (`buildProviderInstanceRows`): both tabs edit the same instances.
+  // Instance rows for the harness instance editor
+  // (`buildProviderInstanceRows`).
   const rows = buildProviderInstanceRows({ settings, serverProviders });
 
   const targetInstanceMissing =
@@ -575,7 +356,6 @@ export function EnvironmentProviderSettings({
       favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
     );
     const resetLabel = driverOption?.label ?? String(row.driver);
-    const connections = settings.modelBackendConnections ?? {};
 
     return (
       <ProviderInstanceCard
@@ -588,6 +368,22 @@ export function EnvironmentProviderSettings({
         selected={mode === "list" && selectedRow?.instanceId === row.instanceId}
         onSelect={mode === "list" ? () => setSelectedInstanceId(row.instanceId) : undefined}
         readOnly={readOnly}
+        hiddenModels={modelPreferences.hiddenModels}
+        favoriteModels={favoriteModels}
+        modelOrder={modelPreferences.modelOrder}
+        onHiddenModelsChange={(hiddenModels) =>
+          updateProviderModelPreferences(row.instanceId, {
+            ...modelPreferences,
+            hiddenModels,
+          })
+        }
+        onFavoriteModelsChange={(next) => updateProviderFavoriteModels(row.instanceId, next)}
+        onModelOrderChange={(modelOrder) =>
+          updateProviderModelPreferences(row.instanceId, {
+            ...modelPreferences,
+            modelOrder,
+          })
+        }
         setup={
           mode === "editor" && row.driver === "antigravity" ? (
             <ProviderSetupSection
@@ -631,22 +427,6 @@ export function EnvironmentProviderSettings({
             />
           ) : null
         }
-        hiddenModels={modelPreferences.hiddenModels}
-        favoriteModels={favoriteModels}
-        modelOrder={modelPreferences.modelOrder}
-        onHiddenModelsChange={(hiddenModels) =>
-          updateProviderModelPreferences(row.instanceId, {
-            ...modelPreferences,
-            hiddenModels,
-          })
-        }
-        onFavoriteModelsChange={(next) => updateProviderFavoriteModels(row.instanceId, next)}
-        onModelOrderChange={(modelOrder) =>
-          updateProviderModelPreferences(row.instanceId, {
-            ...modelPreferences,
-            modelOrder,
-          })
-        }
         onRunUpdate={
           mode === "editor" && showInlineUpdateButton && updateCandidate
             ? () => {
@@ -654,18 +434,21 @@ export function EnvironmentProviderSettings({
               }
             : undefined
         }
-        connections={connections}
         isUpdating={
           mode === "editor" && showInlineUpdateButton ? isInstanceUpdateRunning : undefined
         }
       />
     );
   };
-
   return (
     <>
       <SettingsSection {...searchableSetting("providers")} hideTitle variant="plain">
         <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">
+          {headerLabel ? (
+            <span className="inline-flex h-6 shrink-0 items-center text-sm font-normal tracking-[-0.005em] text-foreground/70">
+              {headerLabel}
+            </span>
+          ) : null}
           {deviceTabs}
           <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
             {readOnly ? (
@@ -754,87 +537,6 @@ export function EnvironmentProviderSettings({
             )}
           </div>
         </div>
-      </SettingsSection>
-
-      <UsageProviderSettings
-        key={environmentId}
-        environmentId={environmentId}
-        environmentLabel={environmentLabel}
-        sources={settings.usageLimitSources}
-        readOnly={readOnly}
-      />
-
-      <SettingsSection title="Advanced">
-        <SettingsRow
-          id={searchableSetting("provider-health-check-interval").id}
-          title={
-            <span className="inline-flex items-center gap-1.5">
-              {searchableSetting("provider-health-check-interval").title}
-              <PolicyTooltip>
-                This interval is configured here, then the shared Background activity policy decides
-                whether provider probes may run when the timer fires. Custom intervals appear as
-                Advanced in General settings.
-              </PolicyTooltip>
-            </span>
-          }
-          description="Refresh provider status, versions, and models in the background. Set to 0 to disable."
-          resetAction={
-            providerHealthRefreshIntervalSeconds !== defaultProviderHealthRefreshIntervalSeconds ? (
-              <span inert={readOnly} className={readOnly ? "opacity-50" : undefined}>
-                <SettingResetButton
-                  label="provider health check interval"
-                  onClick={() =>
-                    updateSettings(
-                      backgroundActivityOverrideSettings(
-                        settings.backgroundActivity,
-                        resolvedBackgroundActivity,
-                        { providerHealthRefreshInterval: undefined },
-                      ),
-                    )
-                  }
-                />
-              </span>
-            ) : null
-          }
-          control={
-            <div
-              inert={readOnly}
-              aria-disabled={readOnly || undefined}
-              className={cn(
-                "flex shrink-0 items-center gap-2",
-                readOnly && "opacity-50 select-none",
-              )}
-            >
-              <NumberField
-                value={providerHealthRefreshIntervalSeconds}
-                min={0}
-                step={PROVIDER_HEALTH_INTERVAL_STEP_SECONDS}
-                size="sm"
-                className="w-32"
-                onValueChange={(value) =>
-                  updateSettings(
-                    backgroundActivityOverrideSettings(
-                      settings.backgroundActivity,
-                      resolvedBackgroundActivity,
-                      {
-                        providerHealthRefreshInterval: Duration.seconds(
-                          normalizeIntervalSeconds(value),
-                        ),
-                      },
-                    ),
-                  )
-                }
-              >
-                <NumberFieldGroup>
-                  <NumberFieldDecrement aria-label="Decrease provider health check interval" />
-                  <NumberFieldInput aria-label="Provider health check interval in seconds" />
-                  <NumberFieldIncrement aria-label="Increase provider health check interval" />
-                </NumberFieldGroup>
-              </NumberField>
-              <span className="text-xs text-muted-foreground">seconds</span>
-            </div>
-          }
-        />
       </SettingsSection>
 
       {isAddInstanceDialogOpen ? (

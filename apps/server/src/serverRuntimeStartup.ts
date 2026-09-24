@@ -2,7 +2,6 @@ import {
   CommandId,
   EventId,
   DEFAULT_MODEL,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_SERVER_SETTINGS,
   type ServerSettings as ServerSettingsValue,
   type ModelSelection,
@@ -251,7 +250,6 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
             projectId: nextProjectId,
             title: "New thread",
             modelSelection: nextThreadModelSelection,
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             runtimeMode: resolveProjectSettings(settings, nextProjectId).settings
               .defaultRuntimeMode,
             branch: null,
@@ -706,7 +704,6 @@ export const reconcileProviderSessions = Effect.gen(function* () {
               ...(capabilities.promptlessTurnContinuation === true
                 ? { continuation: true }
                 : { input: SERVER_UPDATE_CONTINUATION_PROMPT }),
-              interactionMode: thread.interactionMode,
             });
           });
           const continuationExit = yield* Effect.exit(continuation);

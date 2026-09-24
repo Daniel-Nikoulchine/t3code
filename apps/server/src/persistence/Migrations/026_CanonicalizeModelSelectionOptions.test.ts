@@ -84,7 +84,6 @@ layer("026_CanonicalizeModelSelectionOptions", (it) => {
             latest_user_message_at,
             pending_approval_count,
             pending_user_input_count,
-            has_actionable_proposed_plan,
             deleted_at,
             runtime_mode,
             interaction_mode
@@ -216,7 +215,7 @@ layer("026_CanonicalizeModelSelectionOptions", (it) => {
               NULL,
               'corr-tc',
               'user',
-              '{"threadId":"thread-legacy","projectId":"project-legacy","title":"Thread","modelSelection":{"provider":"claudeAgent","model":"claude-opus-4-6","options":{"effort":"max","thinking":false}},"runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
+              '{"threadId":"thread-legacy","projectId":"project-legacy","title":"Thread","modelSelection":{"provider":"claudeAgent","model":"claude-opus-4-6","options":{"effort":"max","thinking":false}},"runtimeMode":"full-access","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
               '{}'
             ),
             (
@@ -244,7 +243,7 @@ layer("026_CanonicalizeModelSelectionOptions", (it) => {
               NULL,
               'corr-tts',
               'user',
-              '{"threadId":"thread-legacy","messageId":"msg-1","modelSelection":{"provider":"claudeAgent","model":"claude-opus-4-6","options":{"effort":"high","contextWindow":"1m"}},"runtimeMode":"full-access","interactionMode":"default","createdAt":"2026-01-01T00:00:00.000Z"}',
+              '{"threadId":"thread-legacy","messageId":"msg-1","modelSelection":{"provider":"claudeAgent","model":"claude-opus-4-6","options":{"effort":"high","contextWindow":"1m"}},"runtimeMode":"full-access","createdAt":"2026-01-01T00:00:00.000Z"}',
               '{}'
             ),
             (
@@ -258,7 +257,7 @@ layer("026_CanonicalizeModelSelectionOptions", (it) => {
               NULL,
               'corr-taa',
               'user',
-              '{"threadId":"thread-already-array","projectId":"project-legacy","title":"Already Array","modelSelection":{"provider":"codex","model":"gpt-5.4","options":[{"id":"reasoningEffort","value":"medium"}]},"runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
+              '{"threadId":"thread-already-array","projectId":"project-legacy","title":"Already Array","modelSelection":{"provider":"codex","model":"gpt-5.4","options":[{"id":"reasoningEffort","value":"medium"}]},"runtimeMode":"full-access","branch":null,"worktreePath":null,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z"}',
               '{}'
             ),
             (

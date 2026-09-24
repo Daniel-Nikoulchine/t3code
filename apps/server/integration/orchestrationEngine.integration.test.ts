@@ -6,7 +6,6 @@ import {
   ApprovalRequestId,
   CommandId,
   defaultInstanceIdForDriver,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
   EventId,
@@ -146,7 +145,6 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
         instanceId,
         model: defaultModel,
       },
-      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       runtimeMode: "approval-required",
       branch: null,
       worktreePath: harness.workspaceDir,
@@ -177,7 +175,6 @@ const startTurn = (input: {
           modelSelection: input.modelSelection,
         }
       : {}),
-    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
     runtimeMode: "approval-required",
     createdAt: input.createdAt ?? nowIso(),
   });
@@ -296,7 +293,6 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5.3-codex",
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           branch: null,
           worktreePath: harness.workspaceDir,
@@ -313,7 +309,6 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
             text: "Reply with exactly ALPHA.",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           createdAt: nowIso(),
         });
@@ -340,7 +335,6 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
             text: "Reply with exactly BETA.",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: nowIso(),
         });

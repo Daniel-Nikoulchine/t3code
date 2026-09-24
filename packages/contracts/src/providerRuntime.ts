@@ -32,6 +32,7 @@ const RuntimeEventRawSource = Schema.Union([
   Schema.Literal("zcode.app-server.request"),
   Schema.Literal("acp.jsonrpc"),
   Schema.Literal("pi.rpc"),
+  Schema.Literal("freebuff.http"),
   Schema.TemplateLiteral(["acp.", Schema.String, ".extension"]),
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;
@@ -601,7 +602,7 @@ export const MONITOR_TASK_TYPES: ReadonlySet<string> = new Set([
   "local_bash",
   "shell",
 ]);
-/** Task types that are neither agents nor watch loops (plan-mode bookkeeping). */
+/** Task types that are neither agents nor watch loops (inert background work). */
 export const INERT_TASK_TYPES: ReadonlySet<string> = new Set(["plan", "dream"]);
 
 /**

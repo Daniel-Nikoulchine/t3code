@@ -36,8 +36,7 @@ selected in Droid. Custom entries must use the exact model identifier Droid adve
 | Auto-accept edits | `--auto low`                 |
 | Full access       | `--skip-permissions-unsafe`  |
 
-Approval buttons use the choices returned by Droid. Automatic approval prefers the session-scoped
-choice and never silently creates a permanent grant. Only use Full access in isolated
+Approval buttons use the choices returned by Droid (see [Permissions](./providers.md#permissions)). Only use Full access in isolated
 environments — it bypasses all Droid permission checks.
 
 Plain-text messages sent while Droid is working redirect the active turn. Images are sent through

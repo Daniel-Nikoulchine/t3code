@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 import type { ModelCapabilities, ServerProviderModel } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
+import {
+  isBackendBucketProviderId,
+  isBackendBucketSlug,
+  stripBackendBucketPrefix,
+} from "../ModelBackendEnvironment.ts";
 
 /**
  * PiRpcProtocol — pure types, builders, and parsers for the Pi / Oh-My-Pi
@@ -578,14 +583,16 @@ export interface PiDiscoveredModel {
   readonly maxTokens?: number | undefined;
 }
 
-const PI_REASONING_EFFORTS: ReadonlyArray<string> = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-];
+export const PI_EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [],
+});
+
+// Reasoning picker, backed by pi's own verdict: the `t3-backend` extension
+// declares `thinkingLevelMap` for off/minimal/low/medium/high (xhigh/max
+// hidden as unverified), `supportsReasoningEffort` sends the mapped value
+// as `reasoning_effort`, and the router translates it for Responses
+// upstreams. Levels pi does not offer never reach the picker.
+const PI_THINKING_EFFORTS: ReadonlyArray<string> = ["off", "minimal", "low", "medium", "high"];
 
 function piReasoningLabel(effort: string): string {
   switch (effort) {
@@ -599,8 +606,6 @@ function piReasoningLabel(effort: string): string {
       return "Medium";
     case "high":
       return "High";
-    case "xhigh":
-      return "Extra High";
     default:
       return effort;
   }
@@ -616,7 +621,7 @@ export function buildPiModelCapabilities(reasoning: boolean): ModelCapabilities 
         id: "reasoningEffort",
         label: "Reasoning",
         type: "select",
-        options: PI_REASONING_EFFORTS.map((effort) =>
+        options: PI_THINKING_EFFORTS.map((effort) =>
           effort === "low"
             ? { id: effort, label: piReasoningLabel(effort), isDefault: true }
             : { id: effort, label: piReasoningLabel(effort) },
@@ -626,11 +631,6 @@ export function buildPiModelCapabilities(reasoning: boolean): ModelCapabilities 
     ],
   });
 }
-
-export const PI_EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
-  optionDescriptors: [],
-});
-
 export const PI_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
   {
     slug: PI_DEFAULT_MODEL_SLUG,
@@ -666,18 +666,38 @@ export function buildPiModelsFromDiscovery(input: {
     const slug = buildPiModelSlug(provider, id);
     if (seen.has(slug)) return [];
     seen.add(slug);
-    const name = model.name?.trim() || id;
+    // Note: `slug` above keeps the full `provider/id` path for routing.
+    const cleanId = isBackendBucketProviderId(provider) ? stripBackendBucketPrefix(id) : id;
+    const name = model.name?.trim() || cleanId;
+    const upstreamSlash = isBackendBucketProviderId(provider) ? cleanId.indexOf("/") : -1;
+    const subProvider = isBackendBucketProviderId(provider)
+      ? upstreamSlash > 0
+        ? cleanId.slice(0, upstreamSlash)
+        : undefined
+      : provider;
+    const displayName = upstreamSlash > 0 ? cleanId.slice(upstreamSlash + 1) : name;
     return [
       {
         slug,
-        name,
-        subProvider: provider,
+        name: displayName,
+        ...(subProvider ? { subProvider } : {}),
         isCustom: false,
         ...(currentSlug === slug ? { isDefault: true } : {}),
         capabilities: buildPiModelCapabilities(model.reasoning === true),
       },
     ];
   });
+}
+
+/** Display name + sub-provider for a custom slug; strips the harness bucket prefix. */
+function resolveBackendBucketDisplay(trimmed: string): { name: string; subProvider?: string } {
+  const displaySlug = stripBackendBucketPrefix(trimmed);
+  const upstreamSlash = displaySlug.indexOf("/");
+  if (!isBackendBucketSlug(trimmed) || upstreamSlash <= 0) return { name: displaySlug };
+  return {
+    name: displaySlug.slice(upstreamSlash + 1),
+    subProvider: displaySlug.slice(0, upstreamSlash),
+  };
 }
 
 /** Fold `customModels` (bare slugs) onto the discovered catalog. */
@@ -691,10 +711,15 @@ export function piModelsFromSettings(
     const trimmed = candidate.trim();
     if (!trimmed || seen.has(trimmed)) continue;
     seen.add(trimmed);
+    // Backend-wired instances append `t3-backend/<slug>` custom models. The
+    // bucket is T3's harness side — strip it from display and surface any
+    // nested upstream as the subtitle. Slug keeps the full path for routing.
+    const { name, subProvider } = resolveBackendBucketDisplay(trimmed);
     custom.push({
       slug: trimmed,
-      name: trimmed,
+      name,
       isCustom: true,
+      ...(subProvider ? { subProvider } : {}),
       capabilities: PI_EMPTY_CAPABILITIES,
     });
   }
@@ -718,10 +743,12 @@ export function piModelsWithDiscovery(
     const trimmed = candidate.trim();
     if (!trimmed || seen.has(trimmed)) continue;
     seen.add(trimmed);
+    const { name, subProvider } = resolveBackendBucketDisplay(trimmed);
     base.push({
       slug: trimmed,
-      name: trimmed,
+      name,
       isCustom: true,
+      ...(subProvider ? { subProvider } : {}),
       capabilities: PI_EMPTY_CAPABILITIES,
     });
   }

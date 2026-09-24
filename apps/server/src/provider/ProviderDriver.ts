@@ -125,6 +125,13 @@ export interface ProviderDriverCreateInput<Config> {
    * `resolveModelBackendEnvironment`. Absent means native.
    */
   readonly backend?: ModelBackendConfig | undefined;
+  /**
+   * Set when `backend` is absent because the referenced connection no
+   * longer resolves (see `orphanBackendConnectionId`). Drivers forward it
+   * to `withInstanceIdentity` so the snapshot marks the silent fallback.
+   * Absent means no fallback.
+   */
+  readonly nativeFallback?: boolean | undefined;
 }
 
 /**

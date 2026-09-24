@@ -30,11 +30,16 @@ import {
   type CursorSettings,
   type GrokSettings,
   type HermesSettings,
+  type ModelBackendConnectionId,
+  type ModelBackendConnections,
+  type ModelCredentials,
   type OpenCodeSettings,
-  ProviderDriverKind,
+  type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
-  ProviderInstanceId,
   type ZcodeSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  T3_ROUTER_CONNECTION_ID,
 } from "@t3tools/contracts";
 import { isHostWindows } from "@t3tools/shared/hostProcess";
 import * as DateTime from "effect/DateTime";
@@ -62,7 +67,10 @@ import * as ModelManifest from "../ModelManifest.ts";
 import { OpenCodeRuntimeLive } from "../opencodeRuntime.ts";
 import * as CodexResetCredit from "./codexResetCredit.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "./ProviderEventLoggers.ts";
-import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistryLive.ts";
+import {
+  makeProviderInstanceRegistry,
+  resolveInstanceBackend,
+} from "./ProviderInstanceRegistryLive.ts";
 
 const TestHttpClientLive = Layer.succeed(
   HttpClient.HttpClient,
@@ -688,4 +696,80 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(zcodeSnapshot.continuation?.groupKey).toBe(`${zcodeDriverKind}:instance:${zcodeId}`);
     }).pipe(Effect.provide(testLayer)),
   );
+});
+
+describe("resolveInstanceBackend", () => {
+  const connectionId = (id: string) => id as ModelBackendConnectionId;
+  const instanceWith = (id: string | undefined): ProviderInstanceConfig =>
+    ({
+      driver: ProviderDriverKind.make("pi"),
+      ...(id === undefined ? {} : { connectionId: connectionId(id) }),
+    }) as ProviderInstanceConfig;
+
+  it("stays native without a connectionId or with an orphan one", () => {
+    const connections = {} as ModelBackendConnections;
+    expect(resolveInstanceBackend(instanceWith(undefined), connections, undefined)).toBeUndefined();
+    expect(resolveInstanceBackend(instanceWith("deleted"), connections, undefined)).toBeUndefined();
+  });
+
+  it("resolves a plain connection to an openai-compatible backend", () => {
+    const connections = {
+      mine: { baseUrl: "http://mine/v1", models: ["a"] },
+    } as unknown as ModelBackendConnections;
+    const keyed = {
+      keyed: {
+        baseUrl: "http://keyed/v1",
+        models: ["b"],
+        apiKeyCredentialId: "cred",
+      },
+    } as unknown as ModelBackendConnections;
+    const credentials = { cred: { value: "secret" } } as unknown as ModelCredentials;
+    expect(resolveInstanceBackend(instanceWith("mine"), connections, undefined)).toEqual({
+      kind: "openai-compatible",
+      baseUrl: "http://mine/v1",
+      models: ["a"],
+    });
+    expect(resolveInstanceBackend(instanceWith("keyed"), keyed, credentials)).toEqual({
+      kind: "openai-compatible",
+      baseUrl: "http://keyed/v1",
+      apiKey: "secret",
+      models: ["b"],
+    });
+  });
+
+  it("resolves the synthesized router connection to a t3-router backend", () => {
+    const connections = {
+      [T3_ROUTER_CONNECTION_ID]: {
+        baseUrl: "http://127.0.0.1:21774/openai",
+        protocols: ["openai", "anthropic"],
+        displayName: "T3 Router",
+      },
+    } as unknown as ModelBackendConnections;
+    expect(
+      resolveInstanceBackend(instanceWith(String(T3_ROUTER_CONNECTION_ID)), connections, undefined),
+    ).toEqual({
+      kind: "t3-router",
+      baseUrl: "http://127.0.0.1:21774/openai",
+      displayName: "T3 Router",
+      protocols: ["openai", "anthropic"],
+    });
+  });
+
+  it("keeps a user-owned entry under the router id on the plain proxy shape", () => {
+    const connections = {
+      [T3_ROUTER_CONNECTION_ID]: {
+        baseUrl: "http://mine-actually/v1",
+        models: ["mine-model"],
+        apiKeyEnv: "MINE_KEY",
+      },
+    } as unknown as ModelBackendConnections;
+    expect(
+      resolveInstanceBackend(instanceWith(String(T3_ROUTER_CONNECTION_ID)), connections, undefined),
+    ).toEqual({
+      kind: "openai-compatible",
+      baseUrl: "http://mine-actually/v1",
+      apiKeyEnv: "MINE_KEY",
+      models: ["mine-model"],
+    });
+  });
 });

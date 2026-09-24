@@ -76,6 +76,8 @@ import {
   canCommitPendingModel,
   modelMatchesCatalogQuery,
   pendingModelAfterPress,
+  providerChoiceSubtitle,
+  providerFilterChoices,
   providerSectionIsCollapsed,
   resolveComboTargetDisplay,
 } from "./thread-settings-sheet-state";
@@ -89,6 +91,7 @@ const PRIMARY_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
   "codex",
   "droid",
+  "freebuff",
   "hermes",
   "cline",
   "antigravity",
@@ -1341,17 +1344,10 @@ function ThreadSettingsModelsScreen() {
   }, [presentation, session]);
   // Groups are logical models, so the provider filter enumerates the
   // distinct providers behind the group's pairings.
-  const providerChoices = useMemo(() => {
-    const byKey = new Map<string, string>();
-    for (const group of session.providerGroups) {
-      for (const model of group.models) {
-        if (!byKey.has(model.providerKey)) {
-          byKey.set(model.providerKey, model.providerLabel);
-        }
-      }
-    }
-    return [...byKey.entries()].map(([key, label]) => ({ key, label }));
-  }, [session.providerGroups]);
+  const providerChoices = useMemo(
+    () => providerFilterChoices(session.providerGroups),
+    [session.providerGroups],
+  );
   const filterMenu = useMemo(
     () => ({
       title: "Model filters",
@@ -1369,6 +1365,7 @@ function ThreadSettingsModelsScreen() {
             ...providerChoices.map((choice) => ({
               type: "action" as const,
               title: choice.label,
+              subtitle: providerChoiceSubtitle(choice.modelCount),
               state: session.providerFilter === choice.key ? ("on" as const) : ("off" as const),
               onPress: () => session.setProviderFilter(choice.key),
             })),
@@ -1504,6 +1501,7 @@ function ThreadSettingsModelsScreen() {
                 <NativeHeaderToolbar.MenuAction
                   key={choice.key}
                   isOn={session.providerFilter === choice.key}
+                  subtitle={providerChoiceSubtitle(choice.modelCount)}
                   onPress={() => session.setProviderFilter(choice.key)}
                 >
                   {choice.label}

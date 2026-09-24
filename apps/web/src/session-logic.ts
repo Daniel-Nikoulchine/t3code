@@ -23,11 +23,8 @@ import { extractToolActivityPresentation } from "@t3tools/client-runtime/work-lo
 import {
   isToolLifecycleItemType,
   type AssetResource,
-  type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
-  type OrchestrationProposedPlanId,
   type ToolLifecycleItemType,
-  type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
 
@@ -35,9 +32,7 @@ import {
   isImageAttachment,
   type ChatAttachment,
   type ChatMessage,
-  type ProposedPlan,
   type SessionPhase,
-  type Thread,
   type ThreadSession,
   type TurnDiffSummary,
 } from "./types";
@@ -121,28 +116,12 @@ export interface ActivePlanState {
   }>;
 }
 
-export interface LatestProposedPlanState {
-  id: OrchestrationProposedPlanId;
-  createdAt: string;
-  updatedAt: string;
-  turnId: TurnId | null;
-  planMarkdown: string;
-  implementedAt: string | null;
-  implementationThreadId: ThreadId | null;
-}
-
 export type TimelineEntry =
   | {
       id: string;
       kind: "message";
       createdAt: string;
       message: ChatMessage;
-    }
-  | {
-      id: string;
-      kind: "proposed-plan";
-      createdAt: string;
-      proposedPlan: ProposedPlan;
     }
   | {
       id: string;
@@ -153,7 +132,6 @@ export type TimelineEntry =
 
 export interface TimelineEntriesProjection {
   readonly messages: ReadonlyArray<ChatMessage>;
-  readonly proposedPlans: ReadonlyArray<ProposedPlan>;
   readonly workEntries: ReadonlyArray<WorkLogEntry>;
   readonly entries: TimelineEntry[];
 }
@@ -189,38 +167,12 @@ export function workEntryIndicatesToolNeutralStatus(entry: WorkLogEntry): boolea
   return true;
 }
 
-type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
-type SessionActivityState = Pick<NonNullable<Thread["session"]>, "status" | "activeTurnId">;
-
-export function isLatestTurnSettled(
-  latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
-): boolean {
-  if (!latestTurn?.startedAt) return false;
-  if (!latestTurn.completedAt) return false;
-  if (!session) return true;
-  if (session.status === "running") return false;
-  return true;
-}
-
-export function deriveActiveWorkStartedAt(
-  latestTurn: LatestTurnTiming | null,
-  session: SessionActivityState | null,
-  sendStartedAt: string | null,
-  latestUserMessageAt: string | null = null,
-): string | null {
-  const runningTurnId = session?.status === "running" ? session.activeTurnId : null;
-  if (runningTurnId !== null) {
-    if (latestTurn?.turnId === runningTurnId) {
-      return latestTurn.startedAt ?? sendStartedAt ?? latestUserMessageAt;
-    }
-    return sendStartedAt ?? latestUserMessageAt;
-  }
-  if (!isLatestTurnSettled(latestTurn, session)) {
-    return latestTurn?.startedAt ?? sendStartedAt;
-  }
-  return sendStartedAt;
-}
+export {
+  deriveActiveWorkStartedAt,
+  isLatestTurnSettled,
+  type LatestTurnTiming,
+  type SessionActivityState,
+} from "@t3tools/shared/orchestrationTiming";
 
 function planStateFromActivity(activity: OrchestrationThreadActivity): ActivePlanState | null {
   const payload =
@@ -350,42 +302,6 @@ export function deriveActivePlanState(
   return addPlanStepDurations(plan, matchingActivities.slice(latestClearIndex + 1));
 }
 
-export function findLatestProposedPlan(
-  proposedPlans: ReadonlyArray<ProposedPlan>,
-  latestTurnId: TurnId | string | null | undefined,
-): LatestProposedPlanState | null {
-  if (latestTurnId) {
-    const matchingTurnPlan = [...proposedPlans]
-      .filter((proposedPlan) => proposedPlan.turnId === latestTurnId)
-      .toSorted(
-        (left, right) =>
-          left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
-      )
-      .at(-1);
-    if (matchingTurnPlan) {
-      return toLatestProposedPlanState(matchingTurnPlan);
-    }
-  }
-
-  const latestPlan = [...proposedPlans]
-    .toSorted(
-      (left, right) =>
-        left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
-    )
-    .at(-1);
-  if (!latestPlan) {
-    return null;
-  }
-
-  return toLatestProposedPlanState(latestPlan);
-}
-
-export function hasActionableProposedPlan(
-  proposedPlan: LatestProposedPlanState | Pick<ProposedPlan, "implementedAt"> | null,
-): boolean {
-  return proposedPlan !== null && proposedPlan.implementedAt === null;
-}
-
 /**
  * Quiet-timeline guarantee: the work log carries the parent's narrative plus
  * at most one row per agent. Everything an agent does internally lives in the
@@ -486,7 +402,6 @@ export function deriveWorkLogEntries(
     if (activity.kind === "turn.plan.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isNoContentRuntimeWarning(activity)) continue;
-    if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
     const entry = toDerivedWorkLogEntry(activity);
     // Native agent launches get their visible row from task.started. Defer
@@ -523,18 +438,6 @@ function isNoContentRuntimeWarning(activity: OrchestrationThreadActivity): boole
     activity.kind === "runtime.warning" &&
     activity.summary.endsWith("(no displayable text content)")
   );
-}
-
-function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
-  if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") {
-    return false;
-  }
-
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
-  return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
 }
 
 const decodeQuestionAttachmentAnswer = Schema.decodeUnknownOption(UserInputAttachmentAnswerPayload);
@@ -924,18 +827,6 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
 
 function normalizeCompactToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
-}
-
-function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPlanState {
-  return {
-    id: proposedPlan.id,
-    createdAt: proposedPlan.createdAt,
-    updatedAt: proposedPlan.updatedAt,
-    turnId: proposedPlan.turnId,
-    planMarkdown: proposedPlan.planMarkdown,
-    implementedAt: proposedPlan.implementedAt,
-    implementationThreadId: proposedPlan.implementationThreadId,
-  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -1437,15 +1328,6 @@ function timelineEntryFromMessage(message: ChatMessage): TimelineEntry {
   };
 }
 
-function timelineEntryFromProposedPlan(proposedPlan: ProposedPlan): TimelineEntry {
-  return {
-    id: proposedPlan.id,
-    kind: "proposed-plan",
-    createdAt: proposedPlan.createdAt,
-    proposedPlan,
-  };
-}
-
 function timelineEntryFromWork(workEntry: WorkLogEntry): TimelineEntry {
   return {
     id: workEntry.id,
@@ -1463,10 +1345,8 @@ function timelineEntrySourceOrder(entry: TimelineEntry): number {
   switch (entry.kind) {
     case "message":
       return 0;
-    case "proposed-plan":
-      return 1;
     case "work":
-      return 2;
+      return 1;
   }
 }
 
@@ -1474,7 +1354,7 @@ function shouldTakePreviousTimelineEntry(previous: TimelineEntry, suffix: Timeli
   const createdAtComparison = compareTimelineEntriesByCreatedAt(previous, suffix);
   if (createdAtComparison !== 0) return createdAtComparison < 0;
   // The original full derivation sorts a source-ordered array with a stable
-  // comparator. On a tie, messages precede plans, plans precede work, and an
+  // comparator. On a tie, messages precede work, and an
   // older item in the same source array precedes a newly appended item.
   return timelineEntrySourceOrder(previous) <= timelineEntrySourceOrder(suffix);
 }
@@ -1650,19 +1530,16 @@ function replaceStreamingTimelineMessages(
 /** Reuse ordered entries across immutable stream updates. Other changes keep the full sort. */
 export function deriveTimelineEntriesWithState(
   messages: ReadonlyArray<ChatMessage>,
-  proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
   previous: TimelineEntriesProjection | null = null,
 ): TimelineEntriesProjection {
   if (
     previous !== null &&
-    previous.proposedPlans.length === proposedPlans.length &&
     previous.workEntries.length === workEntries.length &&
-    hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
     hasExactArrayPrefix(previous.workEntries, workEntries)
   ) {
     const entries = replaceStreamingTimelineMessages(messages, previous);
-    if (entries !== null) return { messages, proposedPlans, workEntries, entries };
+    if (entries !== null) return { messages, workEntries, entries };
   }
   const foldedAnswerMessageIds = new Set(
     workEntries.flatMap((entry) =>
@@ -1675,7 +1552,6 @@ export function deriveTimelineEntriesWithState(
     previous !== null &&
     !previous.entries.some((entry) => entry.kind === "message" && !showMessage(entry.message)) &&
     hasExactArrayPrefix(previous.messages, messages) &&
-    hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
     hasExactArrayPrefix(previous.workEntries, workEntries);
 
   if (canAppend) {
@@ -1683,40 +1559,29 @@ export function deriveTimelineEntriesWithState(
       .slice(previous.messages.length)
       .filter(showMessage)
       .map(timelineEntryFromMessage);
-    const proposedPlanRows = proposedPlans
-      .slice(previous.proposedPlans.length)
-      .map(timelineEntryFromProposedPlan);
     const workRows = workEntries.slice(previous.workEntries.length).map(timelineEntryFromWork);
-    const suffix = [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
-      compareTimelineEntriesByCreatedAt,
-    );
+    const suffix = [...messageRows, ...workRows].toSorted(compareTimelineEntriesByCreatedAt);
     return {
       messages,
-      proposedPlans,
       workEntries,
       entries: mergeTimelineEntrySuffix(previous.entries, suffix),
     };
   }
 
   const messageRows = messages.filter(showMessage).map(timelineEntryFromMessage);
-  const proposedPlanRows = proposedPlans.map(timelineEntryFromProposedPlan);
   const workRows = workEntries.map(timelineEntryFromWork);
   return {
     messages,
-    proposedPlans,
     workEntries,
-    entries: [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
-      compareTimelineEntriesByCreatedAt,
-    ),
+    entries: [...messageRows, ...workRows].toSorted(compareTimelineEntriesByCreatedAt),
   };
 }
 
 export function deriveTimelineEntries(
   messages: ReadonlyArray<ChatMessage>,
-  proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
 ): TimelineEntry[] {
-  return deriveTimelineEntriesWithState(messages, proposedPlans, workEntries).entries;
+  return deriveTimelineEntriesWithState(messages, workEntries).entries;
 }
 
 export function inferCheckpointTurnCountByTurnId(

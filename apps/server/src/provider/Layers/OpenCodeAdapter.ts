@@ -3171,7 +3171,7 @@ export function makeOpenCodeAdapter(
             context.turnTokenUsage = makeOpenCodeTurnTokenUsageAccumulator();
           }
           context.turnTokenUsage?.promptMessageIds.add(messageId);
-          context.activeAgent = agent ?? (input.interactionMode === "plan" ? "plan" : undefined);
+          context.activeAgent = agent;
           context.activeVariant = variant;
           if (steeringTurnId === undefined) {
             context.awaitingBusyAfterInterruption = context.interruptedTurnId !== undefined;

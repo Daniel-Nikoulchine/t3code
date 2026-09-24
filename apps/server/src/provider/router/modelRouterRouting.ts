@@ -30,6 +30,25 @@ export interface ModelRouterSnapshot {
   readonly routes: ModelRouterRoutes;
   readonly connections: ModelBackendConnections;
   readonly credentials: ModelCredentials;
+  /**
+   * Codex harness logins usable as OAuth token sources, keyed by provider
+   * instance id. The proxy mints the bearer per request through the named
+   * harness and never stores a token here.
+   */
+  readonly codexAccounts: Record<string, CodexOAuthAccount>;
+}
+
+/**
+ * How to reach one Codex harness login: spawn inputs for
+ * `resolveCodexOAuthCredentials`, mirroring what `CodexDriver` passes to
+ * `withCodexAppServerClient` (expanded binary path, effective home, launch
+ * args, and the instance's merged environment).
+ */
+export interface CodexOAuthAccount {
+  readonly binaryPath: string;
+  readonly homePath?: string | undefined;
+  readonly launchArgs?: string | undefined;
+  readonly environment?: NodeJS.ProcessEnv | undefined;
 }
 
 export interface ModelRouterUpstream {
@@ -41,14 +60,25 @@ export interface ModelRouterUpstream {
    * to `ANTHROPIC_BASE_URL`), so Anthropic gets `/v1/messages`. OpenAI
    * appends `/chat/completions` either way.
    */
-  readonly kind: "vendor" | "connection";
+  readonly kind: "vendor" | "connection" | "codex-oauth";
   /** Base URL including the API version prefix (repo-wide `/v1` convention). */
   readonly baseUrl: string;
   readonly apiKey: string | undefined;
+  /**
+   * Codex instance whose OAuth login authenticates this route. Set only for
+   * `kind: "codex-oauth"`; the proxy then mints the bearer token per request
+   * through that harness and never relays a stored key.
+   */
+  readonly codexAccountInstanceId?: string | undefined;
   /** Wire protocol the upstream speaks. */
   readonly protocol: ModelProxyProtocol;
   /** Slug to send upstream (`route.upstreamModel`, defaulting to the route key). */
   readonly upstreamModel: string;
+  /**
+   * Force the Responses wire protocol upstream even for chat-shaped inbound
+   * (`route.upstreamResponses`, defaulting to false).
+   */
+  readonly responsesUpstream: boolean;
 }
 
 export type ResolveModelRouteResult =
@@ -130,6 +160,7 @@ export const resolveModelRoute = (
         apiKey,
         protocol: vendorProtocol(target.vendor),
         upstreamModel,
+        responsesUpstream: route.upstreamResponses ?? false,
       },
     };
   }
@@ -137,6 +168,28 @@ export const resolveModelRoute = (
   const connection = snapshot.connections[target.connectionId];
   if (connection === undefined || connection.baseUrl === undefined) {
     return { _tag: "UnresolvedTarget" };
+  }
+  // A Codex OAuth account route authenticates with the harness's own ChatGPT
+  // login, minted per request by the proxy. Keys and env indirections never
+  // apply — a stored credential on the same connection must not override it.
+  // A dangling account reference (instance deleted) cannot mint, so it is
+  // unreachable rather than keyless.
+  if (connection.codexAccountInstanceId !== undefined) {
+    if (snapshot.codexAccounts[connection.codexAccountInstanceId] === undefined) {
+      return { _tag: "UnresolvedTarget" };
+    }
+    return {
+      _tag: "Found",
+      upstream: {
+        kind: "codex-oauth",
+        baseUrl: connection.baseUrl,
+        apiKey: undefined,
+        codexAccountInstanceId: connection.codexAccountInstanceId,
+        protocol: "openai",
+        upstreamModel,
+        responsesUpstream: true,
+      },
+    };
   }
   const credentialValue =
     connection.apiKeyCredentialId === undefined
@@ -154,8 +207,26 @@ export const resolveModelRoute = (
       apiKey,
       protocol: connectionProtocol(connection, inbound),
       upstreamModel,
+      responsesUpstream: route.upstreamResponses ?? false,
     },
   };
+};
+
+/**
+ * Session header OpenCode Go requires (`x-opencode-session`, verified live:
+ * requests without it fail with `MissingSessionID`). A harness-supplied id
+ * passes through; otherwise a stable per-route id keeps routing and prompt
+ * caching working. Returns undefined for any other upstream.
+ */
+export const resolveOpencodeGoSessionHeader = (input: {
+  readonly baseUrl: string;
+  readonly routeKey: string;
+  readonly inboundSessionId: unknown;
+}): string | undefined => {
+  if (!input.baseUrl.includes("opencode.ai/zen/go")) return undefined;
+  return typeof input.inboundSessionId === "string" && input.inboundSessionId.length > 0
+    ? input.inboundSessionId
+    : `t3-router-${input.routeKey}`;
 };
 
 /**

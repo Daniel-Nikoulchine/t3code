@@ -90,7 +90,6 @@ const THREAD_SHELL = {
   title: "Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
-  interactionMode: "default",
   branch: null,
   worktreePath: null,
   latestTurn: null,
@@ -104,7 +103,6 @@ const THREAD_SHELL = {
   latestUserMessageAt: null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
-  hasActionableProposedPlan: false,
 } as const;
 
 const SNAPSHOT: OrchestrationShellSnapshot = {
@@ -217,7 +215,6 @@ describe("environment entity projections", () => {
       unsettledAt: "2026-03-09T10:00:00.000Z",
       deletedAt: null,
       messages,
-      proposedPlans: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
@@ -503,7 +500,6 @@ describe("environment entity projections", () => {
       ...THREAD_SHELL,
       deletedAt: null,
       messages: [],
-      proposedPlans: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread;

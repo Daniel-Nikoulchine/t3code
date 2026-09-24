@@ -23,7 +23,7 @@ import {
 } from "./keybindings.ts";
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
-import { ModelBackendConfig, ModelBackendKind } from "./modelBackend.ts";
+import { ModelBackendConfig, ModelBackendKind, ModelProxyProtocol } from "./modelBackend.ts";
 import { ModelCredentialId } from "./modelCredentials.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
@@ -78,6 +78,14 @@ export const ServerProviderModel = Schema.Struct({
   isCustom: Schema.Boolean,
   isDefault: Schema.optional(Schema.Boolean),
   isLegacy: Schema.optional(Schema.Boolean),
+  /**
+   * Set when this model is served through the instance's API connection
+   * rather than its own login (hybrid instances). Absent means own login.
+   * The connection itself is identified client-side via the instance's
+   * `connectionId`; the flag is all the server needs for per-model backend
+   * selection.
+   */
+  viaConnection: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -192,6 +200,13 @@ export const ServerProviderBackend = Schema.Struct({
   displayName: Schema.optional(TrimmedNonEmptyString),
   viaProxy: Schema.Boolean,
   capabilitiesDegraded: Schema.optional(Schema.Boolean),
+  /**
+   * Set when the instance references a backend connection that no longer
+   * resolves (deleted connection, or the `t3-router` synthesis missing
+   * because the router failed to bind) and silently runs native instead.
+   * Absent means no fallback — legacy producers never set it.
+   */
+  nativeFallback: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderBackend = typeof ServerProviderBackend.Type;
 
@@ -212,6 +227,8 @@ export type ServerTestModelBackendRequest = typeof ServerTestModelBackendRequest
 export const ServerTestModelBackendResult = Schema.Struct({
   ok: Schema.Boolean,
   modelCount: Schema.optional(NonNegativeInt),
+  /** Detected wire protocols; empty when validation probes are inconclusive. */
+  protocols: Schema.optional(Schema.Array(ModelProxyProtocol)),
   /** Slugs decoded from the `/models` payload, when the response carried any. */
   models: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   error: Schema.optional(TrimmedNonEmptyString),
@@ -230,7 +247,6 @@ export const ServerProvider = Schema.Struct({
   accentColor: Schema.optional(TrimmedNonEmptyString),
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
-  showInteractionModeToggle: Schema.optional(Schema.Boolean),
   // The driver streams context window usage, so a started thread will have a
   // meter once its activities load. Clients reserve the meter's space on it.
   reportsContextWindow: Schema.optional(Schema.Boolean),

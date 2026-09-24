@@ -23,6 +23,13 @@ export const ProviderAuthState = Schema.Struct({
   ]),
   flowId: Schema.NullOr(SetupOperationId),
   authorizationUrl: Schema.NullOr(Schema.String),
+  /**
+   * One-time user code the sign-in page asks for (e.g. Codex device auth).
+   * Shown alongside `authorizationUrl`; absent for code-paste flows where the
+   * user brings a code back instead (e.g. Claude). Optional so older clients
+   * keep decoding states from newer servers.
+   */
+  userCode: Schema.optional(Schema.String),
   expiresAt: Schema.NullOr(IsoDateTime),
   message: Schema.NullOr(Schema.String),
 });

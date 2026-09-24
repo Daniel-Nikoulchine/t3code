@@ -4,14 +4,20 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
   isProviderProxied,
+  T3_ROUTER_CONNECTION_ID,
   type ModelBackendConnectionId,
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
-  type ServerSettingsPatch,
 } from "@t3tools/contracts";
-import { deriveModelCatalog, type LogicalModel } from "@t3tools/client-runtime/model-catalog";
+import {
+  connectionMapFromSettings,
+  MODEL_BINDING_BY_DRIVER,
+  resolveModelCatalog,
+  routeSubProvider,
+  type LogicalModel,
+} from "@t3tools/client-runtime/model-catalog";
 import {
   type CustomModelDefinition,
   createModelSelection,
@@ -79,6 +85,58 @@ function readInstanceCustomModels(
     { readonly customModels: ReadonlyArray<unknown> } | undefined
   >;
   return readCustomModelEntries(legacyProviders[driverKind]?.customModels ?? []);
+}
+
+/**
+ * Model slugs the linked model backend connection serves through this
+ * instance. Snapshots list only the harness's own models, so without this
+ * the instance option list (and the composer's selection gate built on it)
+ * cannot see connection-provided slugs even though the pooled catalog
+ * offers them as sources on this instance. Mirrors the connection
+ * synthesis in `deriveModelCatalog`.
+ */
+function readInstanceConnectionModels(
+  settings: UnifiedSettings,
+  instanceId: ProviderInstanceId,
+): ReadonlyArray<string> {
+  const connectionId = settings.providerInstances?.[instanceId]?.connectionId;
+  if (connectionId === undefined) return [];
+  const staticModels = settings.modelBackendConnections?.[connectionId]?.models ?? [];
+  // Router-linked instances serve every route key through the proxy; the
+  // synthesized t3-router connection carries no static list of its own.
+  // Vendor-locked harnesses resolve slugs against their own vendor API and
+  // could never run a route — they keep the gap instead of a dead option.
+  if (connectionId !== T3_ROUTER_CONNECTION_ID) return staticModels;
+  const driver = settings.providerInstances?.[instanceId]?.driver;
+  if ((MODEL_BINDING_BY_DRIVER[driver ?? ""] ?? "vendor-locked") === "vendor-locked") {
+    return staticModels;
+  }
+  return [...staticModels, ...Object.keys(settings.modelRouterRoutes ?? {})];
+}
+
+/**
+ * Upstream provider label for a connection-provided model slug. Route keys
+ * resolve through the route target (MiniMax rule: the connection or vendor
+ * that actually serves the model); static models on a direct connection link
+ * take the connection itself. The reserved `t3-router` bucket is never a
+ * label — those options fall back to the instance display name.
+ */
+function connectionModelSubProvider(
+  settings: UnifiedSettings,
+  instanceId: ProviderInstanceId,
+  slug: string,
+): string | undefined {
+  const connectionId = settings.providerInstances?.[instanceId]?.connectionId;
+  if (connectionId === undefined) return undefined;
+  const route = settings.modelRouterRoutes?.[slug];
+  if (route !== undefined) {
+    const subProvider = routeSubProvider(route);
+    // The harness bucket is never a provider label, even on legacy settings
+    // that predate the `t3-backend` reservation.
+    return subProvider === "t3-backend" ? undefined : subProvider;
+  }
+  if (connectionId === T3_ROUTER_CONNECTION_ID || connectionId === "t3-backend") return undefined;
+  return connectionId;
 }
 
 export interface AppModelOption {
@@ -211,6 +269,7 @@ function getAppModelOptions(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind,
   selectedModel?: string | null,
+  opts?: { readonly includeHiddenModels?: boolean },
 ): AppModelOption[] {
   const rawModels = getProviderModels(providers, provider);
   // Server-reported custom rows mirror settings and can lag a removal, so
@@ -231,8 +290,19 @@ function getAppModelOptions(
   // settings and the initial render before the first write both still
   // see the user's authored custom models.
   const defaultInstanceId = defaultInstanceIdForDriver(provider);
+  const connectionSlugs = readInstanceConnectionModels(settings, defaultInstanceId);
+  for (const slug of connectionSlugs) {
+    if (seen.has(slug)) {
+      continue;
+    }
+
+    seen.add(slug);
+    const subProvider = connectionModelSubProvider(settings, defaultInstanceId, slug);
+    options.push({ slug, name: slug, isCustom: false, ...(subProvider ? { subProvider } : {}) });
+  }
   const customModels = readInstanceCustomModels(settings, defaultInstanceId, provider);
-  for (const entry of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
+  const knownSlugs = new Set([...builtInModelSlugs, ...connectionSlugs]);
+  for (const entry of normalizeCustomModelEntries(customModels, knownSlugs)) {
     if (seen.has(entry.slug)) {
       continue;
     }
@@ -243,7 +313,7 @@ function getAppModelOptions(
 
   const preferences = readInstanceModelPreferences(settings, defaultInstanceId);
   return appendUnavailableDynamicModelSelection(
-    applyInstanceModelPreferences(options, preferences),
+    opts?.includeHiddenModels ? options : applyInstanceModelPreferences(options, preferences),
     rawModels,
     provider,
     selectedModel,
@@ -268,6 +338,7 @@ export function getAppModelOptionsForInstance(
   settings: UnifiedSettings,
   entry: ProviderInstanceEntry,
   selectedModel?: string | null,
+  opts?: { readonly includeHiddenModels?: boolean },
 ): AppModelOption[] {
   const options: AppModelOption[] = entry.models
     .filter((model) => !model.isCustom)
@@ -279,8 +350,19 @@ export function getAppModelOptionsForInstance(
     ),
   );
 
+  const connectionSlugs = readInstanceConnectionModels(settings, entry.instanceId);
+  for (const slug of connectionSlugs) {
+    if (seen.has(slug)) {
+      continue;
+    }
+
+    seen.add(slug);
+    const subProvider = connectionModelSubProvider(settings, entry.instanceId, slug);
+    options.push({ slug, name: slug, isCustom: false, ...(subProvider ? { subProvider } : {}) });
+  }
   const customModels = readInstanceCustomModels(settings, entry.instanceId, entry.driverKind);
-  for (const custom of normalizeCustomModelEntries(customModels, builtInModelSlugs)) {
+  const knownSlugs = new Set([...builtInModelSlugs, ...connectionSlugs]);
+  for (const custom of normalizeCustomModelEntries(customModels, knownSlugs)) {
     if (seen.has(custom.slug)) {
       continue;
     }
@@ -291,7 +373,7 @@ export function getAppModelOptionsForInstance(
 
   const preferences = readInstanceModelPreferences(settings, entry.instanceId);
   const resolved = appendUnavailableDynamicModelSelection(
-    applyInstanceModelPreferences(options, preferences),
+    opts?.includeHiddenModels ? options : applyInstanceModelPreferences(options, preferences),
     entry.models,
     entry.driverKind,
     selectedModel,
@@ -319,7 +401,17 @@ export function resolveAppModelSelectionForInstance(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
   selectedModel: string | null | undefined,
-  resolutionOptions?: { readonly preserveUnavailableSelection?: boolean },
+  resolutionOptions?: {
+    readonly preserveUnavailableSelection?: boolean;
+    /**
+     * Resolve against the full catalog including models the user hid from
+     * the picker list. Only explicit user gestures (harness switch, model
+     * row click) opt in — the eye toggle is display-only and must not veto
+     * an explicit choice. Passive resolution (draft restore, defaults) keeps
+     * the visible-only behavior and falls back.
+     */
+    readonly includeHiddenModels?: boolean;
+  },
 ): string | null {
   const entry = deriveProviderInstanceEntries(providers).find(
     (candidate) => candidate.instanceId === instanceId,
@@ -329,6 +421,7 @@ export function resolveAppModelSelectionForInstance(
     settings,
     entry,
     resolutionOptions?.preserveUnavailableSelection ? selectedModel : null,
+    resolutionOptions?.includeHiddenModels ? { includeHiddenModels: true } : undefined,
   );
   const resolvedSelection = resolveSelectableModel(entry.driverKind, selectedModel, options);
   if (resolvedSelection) {
@@ -384,13 +477,7 @@ export function resolveHarnessSwitchModel(
 export function providerInstanceConnectionMap(
   settings: UnifiedSettings,
 ): Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> {
-  const out: Partial<Record<ProviderInstanceId, ModelBackendConnectionId>> = {};
-  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-    if (instance.connectionId) {
-      out[ProviderInstanceId.make(instanceId)] = instance.connectionId;
-    }
-  }
-  return out;
+  return connectionMapFromSettings(settings);
 }
 
 /**
@@ -404,10 +491,11 @@ export function deriveAppModelCatalog(
   settings: UnifiedSettings,
   providers: ReadonlyArray<ServerProvider>,
 ): LogicalModel[] {
-  return deriveModelCatalog({
+  return resolveModelCatalog({
     providers,
     connections: settings.modelBackendConnections,
-    instanceConnections: providerInstanceConnectionMap(settings),
+    providerInstances: settings.providerInstances,
+    routes: settings.modelRouterRoutes,
   });
 }
 
@@ -434,51 +522,6 @@ export function getCustomModelOptionsByInstance(
     );
   }
   return out;
-}
-
-/**
- * Drop the opencode "plan" agent option from a stored model selection.
- * Used when legacy plan mode is turned off so server-side text-generation
- * tasks (title, branch, PR) cannot keep dispatching the plan agent.
- */
-export function withoutPlanAgentSelection(
-  selection: ModelSelection | null | undefined,
-): ModelSelection | null | undefined {
-  if (!selection?.options) {
-    return selection;
-  }
-  const options = selection.options.filter(
-    (option) => !(option.id === "agent" && option.value === "plan"),
-  );
-  if (options.length === selection.options.length) {
-    return selection;
-  }
-  return createModelSelection(selection.instanceId, selection.model, options);
-}
-
-// The dropdown hides the opencode "plan" agent while legacy plan mode is off,
-// but the persisted text-generation selections are only healed when the toggle
-// flips. Users who already have plan mode off and a stored "plan" selection
-// never trip the toggle handler, so resolve the heal once per settings load.
-export function resolvePlanAgentHealPatch(input: {
-  readonly planModeEnabled: boolean;
-  readonly textGenerationModelSelection: ModelSelection | null | undefined;
-  readonly sourceControlWriterModelSelection: ModelSelection | null | undefined;
-}): ServerSettingsPatch | null {
-  if (input.planModeEnabled) {
-    return null;
-  }
-  const healedText = withoutPlanAgentSelection(input.textGenerationModelSelection);
-  const healedSourceControl = withoutPlanAgentSelection(input.sourceControlWriterModelSelection);
-  const patch: ServerSettingsPatch = {
-    ...(healedText && healedText !== input.textGenerationModelSelection
-      ? { textGenerationModelSelection: healedText }
-      : {}),
-    ...(healedSourceControl && healedSourceControl !== input.sourceControlWriterModelSelection
-      ? { sourceControlWriterModelSelection: healedSourceControl }
-      : {}),
-  };
-  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 export function resolveAppModelSelectionState(
@@ -520,7 +563,6 @@ export function resolveAppModelSelectionState(
       model,
       models: entry.models,
       modelOptions: selectedEntry ? selection.options : undefined,
-      planModeEnabled: settings.planModeEnabled,
     });
 
     return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);

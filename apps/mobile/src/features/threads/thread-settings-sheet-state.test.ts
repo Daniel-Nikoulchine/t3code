@@ -7,6 +7,8 @@ import {
   canCommitPendingModel,
   modelMatchesCatalogQuery,
   pendingModelAfterPress,
+  providerChoiceSubtitle,
+  providerFilterChoices,
   resolveComboTargetDisplay,
 } from "./thread-settings-sheet-state";
 
@@ -154,5 +156,48 @@ describe("thread settings sheet state", () => {
         [],
       ),
     ).toEqual({ title: "gpt-unknown", subtitle: "opencode_proxy" });
+  });
+
+  it("enumerates distinct providers with pairing counts", () => {
+    const claude = {
+      ...modelOption("fable"),
+      key: "claude:fable",
+      providerKey: "claude",
+      providerLabel: "Claude",
+      selection: { instanceId: ProviderInstanceId.make("claude"), model: "fable", options: [] },
+    };
+    const groups = [
+      { key: "gpt-5.4", label: "GPT-5.4", models: [modelOption("gpt-5.4")] },
+      {
+        key: "fable",
+        label: "Fable",
+        models: [
+          claude,
+          {
+            ...claude,
+            key: "claude-personal:fable",
+            providerKey: "claude-personal",
+            providerLabel: "Claude Personal",
+            selection: {
+              instanceId: ProviderInstanceId.make("claude-personal"),
+              model: "fable",
+              options: [],
+            },
+          },
+        ],
+      },
+      { key: "gpt-5.5", label: "GPT-5.5", models: [modelOption("gpt-5.5")] },
+    ];
+
+    expect(providerFilterChoices(groups)).toEqual([
+      { key: "codex", label: "Codex", modelCount: 2 },
+      { key: "claude", label: "Claude", modelCount: 1 },
+      { key: "claude-personal", label: "Claude Personal", modelCount: 1 },
+    ]);
+  });
+
+  it("labels provider filter rows with singular and plural counts", () => {
+    expect(providerChoiceSubtitle(1)).toBe("1 model");
+    expect(providerChoiceSubtitle(12)).toBe("12 models");
   });
 });

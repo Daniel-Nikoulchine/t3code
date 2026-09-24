@@ -6,6 +6,8 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { detectModelBackendProtocols } from "./ModelBackendProtocolProbe.ts";
+import { isNativeBackend } from "./ModelBackendEnvironment.ts";
 
 /** On-demand probe budget: a backend check must never stall the settings UI. */
 export const MODEL_BACKEND_PROBE_TIMEOUT_MS = 4_000;
@@ -64,7 +66,7 @@ export const testModelBackend = (
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<ModelBackendProbeOutcome> =>
   Effect.gen(function* () {
-    if (backend.kind === "native") {
+    if (isNativeBackend(backend)) {
       return { ok: true as const };
     }
     const clientOption = yield* Effect.serviceOption(HttpClient.HttpClient);
@@ -81,19 +83,30 @@ export const testModelBackend = (
       backend.apiKey ?? (backend.apiKeyEnv !== undefined ? baseEnv[backend.apiKeyEnv] : undefined);
     const authHeaders =
       typeof apiKey === "string" && apiKey.length > 0
-        ? [
-            HttpClientRequest.setHeader("authorization", `Bearer ${apiKey}`),
-            HttpClientRequest.setHeader("x-api-key", apiKey),
-          ]
-        : [];
+        ? { authorization: `Bearer ${apiKey}`, "x-api-key": apiKey }
+        : {};
     const request = HttpClientRequest.get(`${baseUrl}/models`).pipe(
       HttpClientRequest.setHeader("accept", "application/json"),
-      ...authHeaders,
+      HttpClientRequest.setHeaders(authHeaders),
+      HttpClientRequest.setHeader("anthropic-version", "2023-06-01"),
     );
     const attempted = yield* Effect.exit(
-      clientOption.value
-        .execute(request)
-        .pipe(Effect.timeoutOption(MODEL_BACKEND_PROBE_TIMEOUT_MS)),
+      Effect.gen(function* () {
+        const response = yield* clientOption.value.execute(request);
+        // The timeout must cover the body read too: a server that sends
+        // headers but never finishes the body would otherwise stall the RPC.
+        const payload = yield* response.pipe(
+          HttpClientResponse.filterStatusOk,
+          Effect.flatMap((okResponse) =>
+            okResponse.json.pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(ModelsListResponse)),
+              Effect.orElseSucceed(() => undefined),
+            ),
+          ),
+          Effect.orElseSucceed(() => null),
+        );
+        return { status: response.status, payload };
+      }).pipe(Effect.timeoutOption(MODEL_BACKEND_PROBE_TIMEOUT_MS)),
     );
     if (Exit.isFailure(attempted)) {
       if (Cause.hasInterruptsOnly(attempted.cause)) {
@@ -107,18 +120,10 @@ export const testModelBackend = (
         error: `request timed out after ${MODEL_BACKEND_PROBE_TIMEOUT_MS}ms`,
       };
     }
-    const response = attempted.value.value;
-    const okResponse = yield* response.pipe(
-      HttpClientResponse.filterStatusOk,
-      Effect.orElseSucceed(() => null),
-    );
-    if (okResponse === null) {
-      return { ok: false as const, error: `request failed with status ${response.status}` };
+    const { status, payload } = attempted.value.value;
+    if (payload === null) {
+      return { ok: false as const, error: `request failed with status ${status}` };
     }
-    const payload = yield* okResponse.json.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(ModelsListResponse)),
-      Effect.orElseSucceed(() => undefined),
-    );
     if (payload === undefined) return { ok: true as const };
     const models = [
       ...new Set(payload.data.map(slugFromModelEntry).filter((slug) => slug !== undefined)),
@@ -139,7 +144,13 @@ export const testModelBackendResult = (
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): Effect.Effect<ServerTestModelBackendResult> =>
   Effect.gen(function* () {
-    const probe = yield* testModelBackend(backend, baseEnv);
+    const [probe, protocols] = yield* Effect.all(
+      [
+        testModelBackend(backend, baseEnv),
+        detectModelBackendProtocols(backend, baseEnv, MODEL_BACKEND_PROBE_TIMEOUT_MS),
+      ],
+      { concurrency: "unbounded" },
+    );
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    return { ...probe, checkedAt };
+    return { ...probe, protocols, checkedAt };
   });

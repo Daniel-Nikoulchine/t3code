@@ -17,12 +17,9 @@
  */
 import type { GrokSettings, ServerProviderSkill } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { ChildProcess } from "effect/unstable/process";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
-import { spawnAndCollect } from "../providerSnapshot.ts";
+import { runCliJsonProbe } from "../cliProbe.ts";
 
 const GROK_SKILLS_PROBE_TIMEOUT_MS = 4_000;
 
@@ -102,50 +99,19 @@ export const discoverGrokSkills = Effect.fn("discoverGrokSkills")(function* (
   cwd?: string,
 ) {
   const command = grokSettings.binaryPath || "grok";
-  const inspectResult = yield* Effect.gen(function* () {
-    const spawnCommand = yield* resolveSpawnCommand(command, ["inspect", "--json"], {
-      env: environment,
-    });
-    return yield* spawnAndCollect(
-      command,
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        ...(cwd ? { cwd } : {}),
-        env: environment,
-        shell: spawnCommand.shell,
+  return yield* runCliJsonProbe({
+    command,
+    args: ["inspect", "--json"],
+    environment,
+    ...(cwd ? { cwd } : {}),
+    timeoutMs: GROK_SKILLS_PROBE_TIMEOUT_MS,
+    makeError: (input) =>
+      new GrokSkillsProbeError({
+        stage: input.stage,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+        ...(input.cause !== undefined ? { cause: input.cause } : {}),
       }),
-    );
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new GrokSkillsProbeError({
-          stage: "spawn",
-          ...(cwd ? { cwd } : {}),
-          cause,
-        }),
-    ),
-    Effect.timeoutOption(GROK_SKILLS_PROBE_TIMEOUT_MS),
-  );
-
-  if (Option.isNone(inspectResult)) {
-    return yield* new GrokSkillsProbeError({
-      stage: "timeout",
-      ...(cwd ? { cwd } : {}),
-    });
-  }
-  const output = inspectResult.value;
-  if (output.code !== 0) {
-    return yield* new GrokSkillsProbeError({
-      stage: "exit",
-      ...(cwd ? { cwd } : {}),
-      exitCode: output.code,
-    });
-  }
-  const skills = decodeGrokInspectSkills(output.stdout);
-  if (!skills) {
-    return yield* new GrokSkillsProbeError({
-      stage: "decode",
-      ...(cwd ? { cwd } : {}),
-    });
-  }
-  return skills;
+    decode: decodeGrokInspectSkills,
+  });
 });

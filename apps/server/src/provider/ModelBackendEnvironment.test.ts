@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { resolveModelBackendEnvironment } from "./ModelBackendEnvironment.ts";
+import {
+  resolveBackendModelSlugs,
+  resolveModelBackendEnvironment,
+} from "./ModelBackendEnvironment.ts";
 
 describe("resolveModelBackendEnvironment", () => {
   it("maps openai-compatible backend to OPENAI/ANTHROPIC overlay", () => {
@@ -130,5 +133,79 @@ describe("resolveModelBackendEnvironment", () => {
 
   it("undefined backend resolves to empty overlay", () => {
     expect(resolveModelBackendEnvironment(undefined, {})).toEqual({});
+  });
+});
+
+describe("resolveBackendModelSlugs", () => {
+  it("serves the router's route keys for a t3-router backend", () => {
+    expect(
+      resolveBackendModelSlugs({
+        backend: { kind: "t3-router", baseUrl: "http://127.0.0.1:20128/openai" },
+        routeKeys: ["gpt-5.6-luna", "glm-4.7"],
+      }),
+    ).toEqual(["gpt-5.6-luna", "glm-4.7"]);
+  });
+
+  it("serves the declared models for a direct openai-compatible backend", () => {
+    expect(
+      resolveBackendModelSlugs({
+        backend: {
+          kind: "openai-compatible",
+          baseUrl: "https://relay.example/v1",
+          models: ["glm-4.7", "kimi-k2"],
+        },
+        routeKeys: ["gpt-5.6-luna"],
+      }),
+    ).toEqual(["glm-4.7", "kimi-k2"]);
+  });
+
+  it("serves nothing for anthropic-only, baseless, native, or absent backends", () => {
+    expect(
+      resolveBackendModelSlugs({
+        backend: {
+          kind: "openai-compatible",
+          baseUrl: "https://relay.example/v1",
+          protocols: ["anthropic"],
+          models: ["claude-sonnet-4-6"],
+        },
+        routeKeys: [],
+      }),
+    ).toEqual([]);
+    expect(
+      resolveBackendModelSlugs({
+        backend: { kind: "t3-router" },
+        routeKeys: ["gpt-5.6-luna"],
+      }),
+    ).toEqual([]);
+    expect(resolveBackendModelSlugs({ backend: { kind: "native" }, routeKeys: ["x"] })).toEqual([]);
+    expect(resolveBackendModelSlugs({ backend: undefined, routeKeys: ["x"] })).toEqual([]);
+  });
+
+  it("defaults to both protocols, so a route-only backend still serves its keys", () => {
+    expect(
+      resolveBackendModelSlugs({
+        backend: { kind: "t3-router", baseUrl: "http://127.0.0.1:20128/openai" },
+        routeKeys: ["a"],
+      }),
+    ).toEqual(["a"]);
+  });
+
+  it("strips a stale harness bucket prefix so wiring never double-prefixes", () => {
+    expect(
+      resolveBackendModelSlugs({
+        backend: {
+          kind: "openai-compatible",
+          baseUrl: "https://relay.example/v1",
+          models: ["t3-backend/probe-go", "t3-backend/t3-backend/nested", "glm-4.7", "glm-4.7"],
+        },
+        routeKeys: [],
+      }),
+    ).toEqual(["probe-go", "nested", "glm-4.7"]);
+    expect(
+      resolveBackendModelSlugs({
+        backend: { kind: "t3-router", baseUrl: "http://127.0.0.1:20128/openai" },
+        routeKeys: ["t3-backend/probe-go"],
+      }),
+    ).toEqual(["probe-go"]);
   });
 });

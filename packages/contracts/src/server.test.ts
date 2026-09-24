@@ -113,6 +113,18 @@ describe("ServerProvider", () => {
     expect(parsed.backend?.displayName).toBe("OmniRoute");
     expect(parsed.backend?.viaProxy).toBe(true);
     expect(parsed.backend?.capabilitiesDegraded).toBe(true);
+    expect(parsed.backend?.nativeFallback).toBeUndefined();
+  });
+
+  it("decodes the silent native-fallback marker", () => {
+    const parsed = decodeServerProvider({
+      ...baseProviderSnapshot,
+      backend: { kind: "native", viaProxy: false, nativeFallback: true },
+    });
+
+    expect(parsed.backend?.kind).toBe("native");
+    expect(parsed.backend?.nativeFallback).toBe(true);
+    expect(isProviderProxied(parsed)).toBe(false);
   });
 
   it("decodes legacy provider snapshot without backend as native", () => {

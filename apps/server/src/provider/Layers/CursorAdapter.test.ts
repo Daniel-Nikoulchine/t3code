@@ -541,62 +541,6 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
     }),
   );
 
-  it.effect("maps app plan mode onto the ACP plan session mode", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CursorAdapter;
-      const serverSettings = yield* ServerSettingsService;
-      const threadId = ThreadId.make("cursor-plan-mode-probe");
-      const tempDir = yield* Effect.promise(() =>
-        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-")),
-      );
-      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
-      const argvLogPath = NodePath.join(tempDir, "argv.txt");
-      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
-      const wrapperPath = yield* Effect.promise(() =>
-        makeProbeWrapper(requestLogPath, argvLogPath),
-      );
-      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
-
-      yield* adapter.startSession({
-        threadId,
-        provider: ProviderDriverKind.make("cursor"),
-        cwd: process.cwd(),
-        runtimeMode: "full-access",
-        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2" },
-      });
-
-      yield* adapter.sendTurn({
-        threadId,
-        input: "plan this change",
-        attachments: [],
-        interactionMode: "plan",
-      });
-      yield* adapter.stopSession(threadId);
-
-      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
-      const modeRequest = requests
-        .toReversed()
-        .find(
-          (entry) =>
-            entry.method === "session/set_mode" ||
-            (entry.method === "session/set_config_option" &&
-              (entry.params as Record<string, unknown> | undefined)?.configId === "mode"),
-        );
-      assert.isDefined(modeRequest);
-      assert.equal(
-        (modeRequest?.params as Record<string, unknown> | undefined)?.sessionId,
-        "mock-session-1",
-      );
-      assert.include(
-        ["architect", "plan"],
-        String(
-          (modeRequest?.params as Record<string, unknown> | undefined)?.modeId ??
-            (modeRequest?.params as Record<string, unknown> | undefined)?.value,
-        ),
-      );
-    }),
-  );
-
   it.effect(
     "applies initial model and mode configuration during startSession and skips repeating it on first send",
     () =>
@@ -653,7 +597,6 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
           input: "hello mock",
           attachments: [],
           modelSelection,
-          interactionMode: "default",
         });
         yield* adapter.stopSession(threadId);
 

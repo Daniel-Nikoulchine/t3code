@@ -22,6 +22,7 @@ const baseInput = {
   displayName: "Cursor",
   accentColor: undefined,
   continuationGroupKey: "cursor:instance:cursor_proxy",
+  backend: undefined,
 } as const;
 
 describe("withInstanceIdentity backend stamp", () => {
@@ -56,5 +57,15 @@ describe("withInstanceIdentity backend stamp", () => {
       viaProxy: true,
       capabilitiesDegraded: true,
     });
+  });
+
+  it("stamps an orphaned connection as native with the fallback marker", () => {
+    const stamped = withInstanceIdentity({
+      ...baseInput,
+      backend: undefined,
+      nativeFallback: true,
+    })(draft);
+
+    expect(stamped.backend).toEqual({ kind: "native", viaProxy: false, nativeFallback: true });
   });
 });

@@ -7,7 +7,6 @@
 import {
   ApprovalRequestId,
   type CopilotSettings,
-  EventId,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -18,7 +17,6 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -31,9 +29,7 @@ import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -41,11 +37,6 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
-import {
-  discoverCopilotSkills,
-  hasCopilotSkillMention,
-  rewriteCopilotSkillMentions,
-} from "../Drivers/CopilotSkills.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterProcessError,
@@ -54,6 +45,15 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import {
+  makeEventStamper,
+  makeThreadLockRegistry,
+  requireScaffoldSession,
+  settlePendingApprovalsAsCancelled,
+  stopScaffoldSession,
+  makeExtensionFailureMapper,
+  parseAcpResumeCursor,
+} from "../acp/AcpAdapterScaffold.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -72,6 +72,10 @@ import {
 } from "../acp/CopilotAcpSupport.ts";
 import { type CopilotAdapterShape } from "../Services/CopilotAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  selectSessionFirstAutoApprovedPermissionOption,
+  selectSessionFirstPermissionOptionId,
+} from "./permissionOptionSelection.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const PROVIDER = ProviderDriverKind.make("copilot");
@@ -155,28 +159,8 @@ interface CopilotSessionContext {
   readonly advertisedModels: ReadonlySet<string> | undefined;
 }
 
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingApprovals.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseCopilotResume(raw: unknown): { sessionId: string } | undefined {
-  if (!isRecord(raw)) return undefined;
-  if (raw.schemaVersion !== COPILOT_RESUME_VERSION) return undefined;
-  if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
-  return { sessionId: raw.sessionId.trim() };
+  return parseAcpResumeCursor(raw, COPILOT_RESUME_VERSION);
 }
 
 export function resolveCopilotAllowAllValue(runtimeMode: RuntimeMode): "on" | "off" {
@@ -192,15 +176,11 @@ export function resolveCopilotAllowAllValue(runtimeMode: RuntimeMode): "on" | "o
 
 function findCopilotModeId(
   modes: ReadonlyArray<{ readonly id: string; readonly name: string }>,
-  interactionMode: "plan" | undefined,
 ): string | undefined {
   const normalized = modes.map((mode) => ({
     id: mode.id,
     haystack: `${mode.id} ${mode.name}`.toLowerCase(),
   }));
-  if (interactionMode === "plan") {
-    return normalized.find((mode) => mode.haystack.includes("plan"))?.id ?? normalized[0]?.id;
-  }
   return (
     normalized.find((mode) => mode.haystack.includes("agent"))?.id ??
     normalized.find((mode) => !mode.haystack.includes("plan"))?.id ??
@@ -242,7 +222,6 @@ function applyCopilotReasoningEffort<E>(input: {
 function applyRequestedSessionConfiguration<E>(input: {
   readonly runtime: AcpSessionRuntime.AcpSessionRuntime["Service"];
   readonly runtimeMode: RuntimeMode;
-  readonly interactionMode?: "plan" | undefined;
   readonly modelSelection:
     | {
         readonly model: string;
@@ -280,7 +259,7 @@ function applyRequestedSessionConfiguration<E>(input: {
       onNone: () => [] as ReadonlyArray<{ readonly id: string; readonly name: string }>,
       onSome: (state) => state?.availableModes ?? [],
     });
-    const requestedModeId = findCopilotModeId(availableModes, input.interactionMode);
+    const requestedModeId = findCopilotModeId(availableModes);
     if (requestedModeId) {
       yield* input.runtime.setMode(requestedModeId).pipe(
         Effect.mapError((cause) =>
@@ -301,44 +280,14 @@ function applyRequestedSessionConfiguration<E>(input: {
 export function selectCopilotAutoApprovedPermissionOption(
   request: EffectAcpSchema.RequestPermissionRequest,
 ): string | undefined {
-  const allowSessionOption = request.options.find((option) => option.optionId === "allow_session");
-  if (allowSessionOption?.optionId.trim()) {
-    return allowSessionOption.optionId.trim();
-  }
-
-  const allowOnceOption =
-    request.options.find((option) => option.optionId === "allow_once") ??
-    request.options.find((option) => option.kind === "allow_once");
-  if (typeof allowOnceOption?.optionId === "string" && allowOnceOption.optionId.trim()) {
-    return allowOnceOption.optionId.trim();
-  }
-
-  return undefined;
+  return selectSessionFirstAutoApprovedPermissionOption(request);
 }
 
 export function selectCopilotPermissionOptionId(
   request: EffectAcpSchema.RequestPermissionRequest,
   decision: Exclude<ProviderApprovalDecision, "cancel">,
 ): string | undefined {
-  const preferredIds =
-    decision === "acceptForSession"
-      ? ["allow_session", "allow_always"]
-      : decision === "accept"
-        ? ["allow_once"]
-        : ["deny"];
-  for (const id of preferredIds) {
-    const exact = request.options.find((option) => option.optionId === id);
-    if (exact?.optionId.trim()) return exact.optionId.trim();
-  }
-  const fallbackKind =
-    decision === "acceptForSession"
-      ? "allow_always"
-      : decision === "accept"
-        ? "allow_once"
-        : "reject_once";
-  return (
-    request.options.find((option) => option.kind === fallbackKind)?.optionId.trim() || undefined
-  );
+  return selectSessionFirstPermissionOptionId(request, decision);
 }
 
 function permissionOutcome(
@@ -380,57 +329,24 @@ export function makeCopilotAdapter(
     const makeAcpNativeLoggers = yield* makeAcpNativeLoggerFactory();
 
     const sessions = new Map<ThreadId, CopilotSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
-    const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-    const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "crypto/randomUUIDv4",
-            detail: "Failed to generate Copilot runtime identifier.",
-            cause,
-          }),
-      ),
+    const locks = yield* makeThreadLockRegistry;
+    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+      locks.withThreadLock(threadId, effect);
+    const stamper = yield* makeEventStamper({
+      provider: PROVIDER,
+      detail: "Failed to generate Copilot runtime identifier.",
+    });
+    const nowIso = stamper.nowIso;
+    const randomUUIDv4 = stamper.randomUUIDv4;
+    const makeEventStamp = stamper.makeEventStamp;
+    const mapExtensionFailure = makeExtensionFailureMapper(
+      "Failed to process Copilot ACP extension event.",
     );
-    const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
-    const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
-    const mapExtensionFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-      effect.pipe(
-        Effect.mapError(
-          (cause) =>
-            new EffectAcpErrors.AcpTransportError({
-              detail: "Failed to process Copilot ACP extension event.",
-              cause,
-            }),
-        ),
-      );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (
       threadId: ThreadId,
@@ -491,42 +407,16 @@ export function makeCopilotAdapter(
         );
       });
 
-    const requireSession = (
-      threadId: ThreadId,
-    ): Effect.Effect<CopilotSessionContext, ProviderAdapterSessionNotFoundError> => {
-      const ctx = sessions.get(threadId);
-      if (!ctx || ctx.stopped) {
-        return Effect.fail(
-          new ProviderAdapterSessionNotFoundError({ provider: PROVIDER, threadId }),
-        );
-      }
-      return Effect.succeed(ctx);
-    };
+    const requireSession = requireScaffoldSession(sessions, PROVIDER);
 
     const stopSessionInternal = (ctx: CopilotSessionContext) =>
-      Effect.gen(function* () {
-        if (ctx.stopped) return;
-        ctx.stopped = true;
-        yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        if (ctx.notificationFiber) {
-          yield* Fiber.interrupt(ctx.notificationFiber);
-        }
-        yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
-        sessions.delete(ctx.threadId);
-        // Release the per-thread semaphore so starting and stopping sessions
-        // does not grow threadLocksRef for the adapter's lifetime.
-        yield* SynchronizedRef.update(threadLocksRef, (current) => {
-          const next = new Map(current);
-          next.delete(ctx.threadId);
-          return next;
-        });
-        yield* offerRuntimeEvent({
-          type: "session.exited",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
-        });
+      stopScaffoldSession({
+        ctx,
+        sessions,
+        releaseThreadLock: locks.releaseThreadLock,
+        offerRuntimeEvent,
+        makeEventStamp,
+        provider: PROVIDER,
       });
 
     const startSession: CopilotAdapterShape["startSession"] = (input) =>
@@ -713,7 +603,6 @@ export function makeCopilotAdapter(
           const appliedModelId = yield* applyRequestedSessionConfiguration({
             runtime: acp,
             runtimeMode: input.runtimeMode,
-            interactionMode: undefined,
             modelSelection: copilotModelSelection,
             advertisedModels,
             mapError: ({ cause, method }) =>
@@ -1006,11 +895,7 @@ export function makeCopilotAdapter(
           const rawPrompt = input.input?.trim() ?? "";
           if (rawPrompt) {
             // Copilot skills surface as `/SKILL-NAME` slash commands over ACP;
-            // no local `$name` rewriting is needed (stub helpers stay for
-            // parity with other ACP providers).
-            void hasCopilotSkillMention;
-            void rewriteCopilotSkillMentions;
-            void discoverCopilotSkills;
+            // no local `$name` rewriting is needed.
             promptParts.push({ type: "text", text: rawPrompt });
           }
           if (input.attachments && input.attachments.length > 0) {
@@ -1122,7 +1007,6 @@ export function makeCopilotAdapter(
           yield* applyRequestedSessionConfiguration({
             runtime: ctx.acp,
             runtimeMode: ctx.session.runtimeMode,
-            interactionMode: input.interactionMode === "plan" ? "plan" : undefined,
             modelSelection: undefined,
             advertisedModels: undefined,
             mapError: ({ cause, method }) =>

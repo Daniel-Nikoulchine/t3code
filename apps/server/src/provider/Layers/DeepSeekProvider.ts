@@ -1,7 +1,6 @@
 import {
   type DeepSeekSettings,
   type ModelCapabilities,
-  type ServerProvider,
   type ServerProviderAuth,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -13,7 +12,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
-import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -28,10 +26,7 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "../providerMaintenance.ts";
+import { makeEnrichSnapshot } from "../providerMaintenance.ts";
 import {
   DEEPSEEK_DEFAULT_MODEL_SLUG,
   isValidDeepSeekReasoningEffortToken,
@@ -43,7 +38,6 @@ import { sessionModelStateFromInitialize } from "../acp/AcpRuntimeModel.ts";
 const DEEPSEEK_PRESENTATION = {
   displayName: "DeepSeek",
   badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -571,25 +565,4 @@ export const checkDeepSeekProviderStatus = Effect.fn("checkDeepSeekProviderStatu
   });
 });
 
-export const enrichDeepSeekSnapshot = (input: {
-  readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
-  readonly enableProviderUpdateChecks?: boolean;
-  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
-  readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
-  const { snapshot, publishSnapshot } = input;
-
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
-    enableProviderUpdateChecks: input.enableProviderUpdateChecks,
-  }).pipe(
-    Effect.provideService(HttpClient.HttpClient, input.httpClient),
-    Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("DeepSeek version advisory enrichment failed", {
-        errorTag: causeErrorTag(cause),
-      }),
-    ),
-    Effect.asVoid,
-  );
-};
+export const enrichDeepSeekSnapshot = makeEnrichSnapshot("DeepSeek");

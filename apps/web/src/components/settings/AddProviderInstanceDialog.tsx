@@ -14,7 +14,6 @@ import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hook
 import { cn } from "../../lib/utils";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Button } from "../ui/button";
-import { ACPRegistryIcon, Gemini, GithubCopilotIcon, PiAgentIcon, type Icon } from "../Icons";
 import { Dialog } from "../ui/dialog";
 import { Badge } from "../ui/badge";
 import { Input } from "../ui/input";
@@ -25,6 +24,7 @@ import { ProviderSettingsForm, deriveProviderSettingsFields } from "./ProviderSe
 import { WizardPanel, WizardPopup, WizardHeader, WizardFooter } from "../ui/wizard";
 import {
   ADD_PROVIDER_WIZARD_STEPS,
+  getExistingHarnessDrivers,
   resolveWizardNavigation,
   type WizardNavigation,
 } from "./AddProviderInstanceDialog.logic";
@@ -64,34 +64,6 @@ const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 const DEFAULT_DRIVER_OPTION = DRIVER_OPTIONS[0]!;
 const EMPTY_CONFIG_DRAFT: Record<string, unknown> = {};
-interface ComingSoonDriverOption {
-  readonly value: ProviderDriverKind;
-  readonly label: string;
-  readonly icon: Icon;
-}
-
-const COMING_SOON_DRIVER_OPTIONS: readonly ComingSoonDriverOption[] = [
-  {
-    value: ProviderDriverKind.make("githubCopilot"),
-    label: "Github Copilot",
-    icon: GithubCopilotIcon,
-  },
-  {
-    value: ProviderDriverKind.make("gemini"),
-    label: "Gemini",
-    icon: Gemini,
-  },
-  {
-    value: ProviderDriverKind.make("acpRegistry"),
-    label: "ACP Registry",
-    icon: ACPRegistryIcon,
-  },
-  {
-    value: ProviderDriverKind.make("piAgent"),
-    label: "Pi Agent",
-    icon: PiAgentIcon,
-  },
-];
 
 /**
  * Validate an instance id against the same slug rules the server applies in
@@ -124,8 +96,20 @@ export function AddProviderInstanceDialog({
   const settings = useEnvironmentSettings(environmentId);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
 
+  const existingDrivers = useMemo(
+    () =>
+      getExistingHarnessDrivers({
+        providers: settings.providers,
+        providerInstances: settings.providerInstances,
+      }),
+    [settings.providers, settings.providerInstances],
+  );
   const [wizardStep, setWizardStep] = useState(0);
-  const [driver, setDriver] = useState<ProviderDriverKind>(DEFAULT_DRIVER_KIND);
+  const [driver, setDriver] = useState<ProviderDriverKind>(
+    () =>
+      DRIVER_OPTIONS.find((option) => !existingDrivers.has(option.value))?.value ??
+      DEFAULT_DRIVER_KIND,
+  );
   const [label, setLabel] = useState("");
   const [accentColor, setAccentColor] = useState<string>("");
   const [instanceIdOverride, setInstanceIdOverride] = useState<string | null>(null);
@@ -147,6 +131,9 @@ export function AddProviderInstanceDialog({
     () => deriveProviderSettingsFields(driverOption),
     [driverOption],
   );
+  const driverError = existingDrivers.has(driver)
+    ? "This Harness already exists on this device. Edit or enable its existing entry instead."
+    : null;
   const instanceIdError = validateInstanceId(instanceId, existingIds);
   const showInstanceIdError = hasAttemptedSubmit && instanceIdError !== null;
   const previewLabel = label.trim() || `${driverOption.label} Workspace`;
@@ -176,12 +163,17 @@ export function AddProviderInstanceDialog({
     applyWizardNavigation(
       resolveWizardNavigation(wizardStep, requestedStep, ADD_PROVIDER_WIZARD_STEPS.length, {
         instanceIdError,
+        driverError,
       }),
     );
   };
 
   const handleSave = () => {
     setHasAttemptedSubmit(true);
+    if (driverError !== null) {
+      setWizardStep(0);
+      return;
+    }
     if (instanceIdError !== null) return;
 
     const config = configByDriver[driver] ?? {};
@@ -208,14 +200,14 @@ export function AddProviderInstanceDialog({
       updateSettings({ providerInstances: nextMap });
       toastManager.add({
         type: "success",
-        title: "Provider instance added",
+        title: "Harness instance added",
         description: `${driverOption.label} instance '${instanceId}' was added.`,
       });
       onOpenChange(false);
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Could not add provider instance",
+        title: "Could not add harness instance",
         description: error instanceof Error ? error.message : "Update failed.",
       });
     }
@@ -225,11 +217,11 @@ export function AddProviderInstanceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <WizardPopup>
         <WizardHeader
-          title="Add provider instance"
+          title="Add Harness instance"
           description={
             <>
-              Configure an additional provider instance on {environmentLabel} — for example, a
-              second Codex install pointed at a different workspace.
+              Configure a Harness on {environmentLabel}. Each Harness can only be added once per
+              device.
             </>
           }
         >
@@ -237,6 +229,7 @@ export function AddProviderInstanceDialog({
             currentStep={wizardStep}
             summaries={wizardStepSummaries}
             instanceIdError={instanceIdError}
+            driverError={driverError}
             onNavigation={applyWizardNavigation}
           />
         </WizardHeader>
@@ -258,7 +251,8 @@ export function AddProviderInstanceDialog({
                   <RadioPrimitive.Root
                     key={option.value}
                     value={option.value}
-                    className="relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
+                    disabled={existingDrivers.has(option.value)}
+                    className="data-disabled:cursor-not-allowed data-disabled:opacity-50 relative flex cursor-pointer items-center gap-3 rounded-lg bg-card px-3 py-3 text-left text-muted-foreground outline-none ring-1 ring-black/5 hover:bg-zinc-50 focus-visible:ring-2 focus-visible:ring-ring data-checked:bg-primary/8 data-checked:text-foreground data-checked:ring-2 data-checked:ring-primary data-checked:hover:bg-primary/8 dark:bg-white/3 dark:ring-white/5 dark:hover:bg-white/5 dark:data-checked:bg-primary/15 dark:data-checked:ring-primary dark:data-checked:hover:bg-primary/15"
                   >
                     <IconComponent className="size-4 shrink-0" aria-hidden />
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
@@ -270,7 +264,9 @@ export function AddProviderInstanceDialog({
                     >
                       <CheckIcon className="size-3.5 shrink-0" />
                     </RadioPrimitive.Indicator>
-                    {option.badgeLabel ? (
+                    {existingDrivers.has(option.value) ? (
+                      <Badge size="sm">Already added</Badge>
+                    ) : option.badgeLabel ? (
                       <Badge variant="warning" size="sm">
                         {option.badgeLabel}
                       </Badge>
@@ -278,28 +274,12 @@ export function AddProviderInstanceDialog({
                   </RadioPrimitive.Root>
                 );
               })}
-              {COMING_SOON_DRIVER_OPTIONS.map((option) => {
-                const IconComponent = option.icon;
-                return (
-                  <RadioPrimitive.Root
-                    key={option.value}
-                    value={option.value}
-                    disabled
-                    className={cn(
-                      "relative flex cursor-not-allowed items-center gap-3 rounded-lg bg-card/60 px-3 py-3 text-left opacity-55 outline-none ring-1 ring-black/5 dark:bg-white/2 dark:ring-white/5",
-                    )}
-                  >
-                    <IconComponent className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                      {option.label}
-                    </span>
-                    <Badge variant="warning" size="sm">
-                      Coming Soon
-                    </Badge>
-                  </RadioPrimitive.Root>
-                );
-              })}
             </RadioGroup>
+            {driverError ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                {driverError}
+              </p>
+            ) : null}
           </div>
 
           <label className={cn("grid gap-2", wizardStep !== 1 && "hidden")}>
@@ -311,7 +291,7 @@ export function AddProviderInstanceDialog({
               onChange={(event) => setLabel(event.target.value)}
             />
             <span className="text-[11px] text-muted-foreground">
-              Shown in the provider list. Optional.
+              Shown in the harness list. Optional.
             </span>
           </label>
 
@@ -342,7 +322,7 @@ export function AddProviderInstanceDialog({
                 type="color"
                 value={normalizeProviderAccentColor(accentColor) ?? PROVIDER_ACCENT_SWATCHES[0]}
                 onChange={(event) => setAccentColor(event.target.value)}
-                aria-label="Provider instance accent color"
+                aria-label="Harness instance accent color"
                 className="h-8 w-10 cursor-pointer rounded-xl border border-input bg-background p-0.5"
               />
               <div className="flex flex-wrap gap-1.5">
@@ -415,9 +395,13 @@ export function AddProviderInstanceDialog({
             {wizardStep === 0 ? "Cancel" : "Back"}
           </Button>
           {wizardStep < ADD_PROVIDER_WIZARD_STEPS.length - 1 ? (
-            <Button onClick={() => navigateToStep(wizardStep + 1)}>Next</Button>
+            <Button disabled={driverError !== null} onClick={() => navigateToStep(wizardStep + 1)}>
+              Next
+            </Button>
           ) : (
-            <Button onClick={handleSave}>Add instance</Button>
+            <Button disabled={driverError !== null} onClick={handleSave}>
+              Add instance
+            </Button>
           )}
         </WizardFooter>
       </WizardPopup>

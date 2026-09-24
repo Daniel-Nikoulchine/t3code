@@ -75,8 +75,8 @@ it.effect("reads project shells without loading threads or resolving excluded pr
     const expected = (yield* query.getShellSnapshot()).projects;
     resolved.length = 0;
     yield* sql`INSERT INTO projection_threads
-      (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
-      VALUES ('t1', 'p1', 'Thread', 'invalid-json', 'full-access', 'default', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`;
+      (thread_id, project_id, title, model_selection_json, runtime_mode, created_at, updated_at)
+      VALUES ('t1', 'p1', 'Thread', 'invalid-json', 'full-access', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')`;
 
     const counter = makeSqlStatementCounter();
     const projects = yield* query.getProjectShells().pipe(Effect.withTracer(counter.tracer));
@@ -123,7 +123,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`DELETE FROM projection_state`;
-      yield* sql`DELETE FROM projection_thread_proposed_plans`;
       yield* sql`DELETE FROM projection_thread_pull_requests`;
       yield* sql`DELETE FROM projection_turns`;
 
@@ -196,7 +195,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           linked_pull_request_json,
@@ -205,7 +203,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           pinned_at,
           pin_order_key,
           active_order_key,
@@ -219,7 +216,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'Thread 1',
           '{"provider":"codex","model":"gpt-5-codex"}',
           'full-access',
-          'default',
           NULL,
           NULL,
           '{"projectId":"project-1","repository":"pingdotgg/t3code","number":41,"url":"https://github.com/pingdotgg/t3code/pull/41"}',
@@ -227,7 +223,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'turn-1',
           '2026-02-24T00:00:04.000Z',
           1,
-          0,
           0,
           '2026-02-24T00:00:01.000Z',
           'gm',
@@ -260,30 +255,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           '2026-02-24T00:00:05.000Z'
         )
       `;
-
-      yield* sql`
-        INSERT INTO projection_thread_proposed_plans (
-          plan_id,
-          thread_id,
-          turn_id,
-          plan_markdown,
-          implemented_at,
-          implementation_thread_id,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          'plan-1',
-          'thread-1',
-          'turn-1',
-          '# Ship it',
-          '2026-02-24T00:00:05.500Z',
-          'thread-2',
-          '2026-02-24T00:00:05.000Z',
-          '2026-02-24T00:00:05.500Z'
-        )
-      `;
-
       yield* sql`
         INSERT INTO projection_thread_activities (
           activity_id,
@@ -337,8 +308,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           thread_id,
           turn_id,
           pending_message_id,
-          source_proposed_plan_thread_id,
-          source_proposed_plan_id,
           assistant_message_id,
           state,
           requested_at,
@@ -353,8 +322,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'thread-1',
           'turn-1',
           NULL,
-          'thread-1',
-          'plan-1',
           'message-1',
           'completed',
           '2026-02-24T00:00:08.000Z',
@@ -456,7 +423,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
-          interactionMode: "default",
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -469,10 +435,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             startedAt: "2026-02-24T00:00:08.000Z",
             completedAt: "2026-02-24T00:00:08.000Z",
             assistantMessageId: asMessageId("message-1"),
-            sourceProposedPlan: {
-              threadId: ThreadId.make("thread-1"),
-              planId: "plan-1",
-            },
           },
           createdAt: "2026-02-24T00:00:02.000Z",
           updatedAt: "2026-02-24T00:00:03.000Z",
@@ -497,17 +459,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               streaming: false,
               createdAt: "2026-02-24T00:00:04.000Z",
               updatedAt: "2026-02-24T00:00:05.000Z",
-            },
-          ],
-          proposedPlans: [
-            {
-              id: "plan-1",
-              turnId: asTurnId("turn-1"),
-              planMarkdown: "# Ship it",
-              implementedAt: "2026-02-24T00:00:05.500Z",
-              implementationThreadId: ThreadId.make("thread-2"),
-              createdAt: "2026-02-24T00:00:05.000Z",
-              updatedAt: "2026-02-24T00:00:05.500Z",
             },
           ],
           activities: [
@@ -582,7 +533,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
-          interactionMode: "default",
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -595,10 +545,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             startedAt: "2026-02-24T00:00:08.000Z",
             completedAt: "2026-02-24T00:00:08.000Z",
             assistantMessageId: asMessageId("message-1"),
-            sourceProposedPlan: {
-              threadId: ThreadId.make("thread-1"),
-              planId: "plan-1",
-            },
           },
           createdAt: "2026-02-24T00:00:02.000Z",
           updatedAt: "2026-02-24T00:00:03.000Z",
@@ -625,7 +571,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           latestUserMessageAt: "2026-02-24T00:00:04.000Z",
           hasPendingApprovals: true,
           hasPendingUserInput: false,
-          hasActionableProposedPlan: false,
           backgroundLiveness: null,
           planProgress: null,
         },
@@ -703,10 +648,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(detailWithoutActivities.value.activeOrderKey, "hq");
         assert.deepEqual(detailWithoutActivities.value.activities, []);
         assert.deepEqual(detailWithoutActivities.value.messages, snapshot.threads[0]?.messages);
-        assert.deepEqual(
-          detailWithoutActivities.value.proposedPlans,
-          snapshot.threads[0]?.proposedPlans,
-        );
         assert.deepEqual(
           detailWithoutActivities.value.checkpoints,
           snapshot.threads[0]?.checkpoints,
@@ -966,14 +907,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           created_at,
           updated_at,
           archived_at,
@@ -986,12 +925,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'Active Thread',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             NULL,
             NULL,
             NULL,
             NULL,
-            0,
             0,
             0,
             '2026-04-06T00:00:02.000Z',
@@ -1005,12 +942,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'Archived Thread',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             NULL,
             NULL,
             NULL,
             NULL,
-            0,
             0,
             0,
             '2026-04-06T00:00:04.000Z',
@@ -1026,7 +961,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (${ORCHESTRATION_PROJECTOR_NAMES.projects}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threads}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}, 4, '2026-04-06T00:00:07.000Z'),
-          (${ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadActivities}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadSessions}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.checkpoints}, 4, '2026-04-06T00:00:07.000Z')
@@ -1110,14 +1044,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           created_at,
           updated_at,
           archived_at,
@@ -1131,12 +1063,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'Settled Thread',
           '{"provider":"codex","model":"gpt-5-codex"}',
           'full-access',
-          'default',
           NULL,
           NULL,
           NULL,
           NULL,
-          0,
           0,
           0,
           '2026-04-06T00:00:02.000Z',
@@ -1154,7 +1084,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (${ORCHESTRATION_PROJECTOR_NAMES.projects}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threads}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}, 4, '2026-04-06T00:00:07.000Z'),
-          (${ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadActivities}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadSessions}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.checkpoints}, 4, '2026-04-06T00:00:07.000Z')
@@ -1232,7 +1161,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
@@ -1248,7 +1176,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'First Thread',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             NULL,
             NULL,
             NULL,
@@ -1263,7 +1190,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'Second Thread',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             NULL,
             NULL,
             NULL,
@@ -1278,7 +1204,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'Deleted Thread',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             NULL,
             NULL,
             NULL,
@@ -1399,7 +1324,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
@@ -1414,7 +1338,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'Context Thread',
           '{"provider":"codex","model":"gpt-5-codex"}',
           'full-access',
-          'default',
           'feature/perf',
           '/tmp/context-worktree',
           NULL,
@@ -1430,8 +1353,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           thread_id,
           turn_id,
           pending_message_id,
-          source_proposed_plan_thread_id,
-          source_proposed_plan_id,
           assistant_message_id,
           state,
           requested_at,
@@ -1448,8 +1369,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'turn-1',
             NULL,
             NULL,
-            NULL,
-            NULL,
             'completed',
             '2026-03-02T00:00:04.000Z',
             '2026-03-02T00:00:04.000Z',
@@ -1462,8 +1381,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (
             'thread-context',
             'turn-2',
-            NULL,
-            NULL,
             NULL,
             NULL,
             'completed',
@@ -1552,14 +1469,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           created_at,
           updated_at,
           deleted_at
@@ -1570,12 +1485,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'Thread 1',
           '{"provider":"codex","model":"gpt-5-codex"}',
           'full-access',
-          'default',
           NULL,
           NULL,
           NULL,
           NULL,
-          0,
           0,
           0,
           '2026-04-01T00:00:02.000Z',
@@ -1713,14 +1626,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           created_at,
           updated_at,
           archived_at,
@@ -1732,12 +1643,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'Thread 1',
           '{"provider":"codex","model":"gpt-5-codex"}',
           'full-access',
-          'default',
           NULL,
           NULL,
           'turn-running',
           '2026-04-02T00:00:04.000Z',
-          0,
           0,
           0,
           '2026-04-02T00:00:02.000Z',
@@ -1752,8 +1661,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           thread_id,
           turn_id,
           pending_message_id,
-          source_proposed_plan_thread_id,
-          source_proposed_plan_id,
           assistant_message_id,
           state,
           requested_at,
@@ -1769,8 +1676,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'thread-1',
             'turn-completed',
             'message-user-1',
-            NULL,
-            NULL,
             'message-assistant-1',
             'completed',
             '2026-04-02T00:00:05.000Z',
@@ -1785,8 +1690,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'thread-1',
             'turn-running',
             'message-user-2',
-            NULL,
-            NULL,
             NULL,
             'running',
             '2026-04-02T00:00:30.000Z',
@@ -1857,14 +1760,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           created_at,
           updated_at,
           archived_at,
@@ -1876,12 +1777,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'Thread 1',
           '{"provider":"codex","model":"gpt-5-codex"}',
           'full-access',
-          'default',
           NULL,
           NULL,
           'turn-running',
           '2026-04-03T00:00:04.000Z',
-          0,
           0,
           0,
           '2026-04-03T00:00:02.000Z',
@@ -1896,8 +1795,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           thread_id,
           turn_id,
           pending_message_id,
-          source_proposed_plan_thread_id,
-          source_proposed_plan_id,
           assistant_message_id,
           state,
           requested_at,
@@ -1914,8 +1811,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'turn-running',
             'message-user-2',
             NULL,
-            NULL,
-            NULL,
             'running',
             '2026-04-03T00:00:30.000Z',
             '2026-04-03T00:00:30.000Z',
@@ -1929,8 +1824,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'thread-1',
             'turn-completed',
             'message-user-1',
-            NULL,
-            NULL,
             'message-assistant-1',
             'completed',
             '2026-04-03T00:00:05.000Z',
@@ -1949,7 +1842,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (${ORCHESTRATION_PROJECTOR_NAMES.projects}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threads}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}, 3, '2026-04-03T00:00:40.000Z'),
-          (${ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadActivities}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadSessions}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.checkpoints}, 3, '2026-04-03T00:00:40.000Z')
@@ -2009,14 +1901,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           created_at,
           updated_at,
           archived_at,
@@ -2028,12 +1918,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'Deleted Thread',
           '{"provider":"codex","model":"gpt-5-codex"}',
           'full-access',
-          'default',
           NULL,
           NULL,
           'turn-deleted',
           NULL,
-          0,
           0,
           0,
           '2026-04-05T00:00:03.000Z',
@@ -2048,8 +1936,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           thread_id,
           turn_id,
           pending_message_id,
-          source_proposed_plan_thread_id,
-          source_proposed_plan_id,
           assistant_message_id,
           state,
           requested_at,
@@ -2064,8 +1950,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'thread-deleted',
           'turn-deleted',
           'message-deleted-user',
-          NULL,
-          NULL,
           'message-deleted-assistant',
           'completed',
           '2026-04-05T00:00:04.100Z',
@@ -2137,14 +2021,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title,
           model_selection_json,
           runtime_mode,
-          interaction_mode,
           branch,
           worktree_path,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
           pending_user_input_count,
-          has_actionable_proposed_plan,
           created_at,
           updated_at,
           archived_at,
@@ -2157,12 +2039,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'Literal 100% fix',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             'search-branch',
             NULL,
             'turn-active',
             '2026-05-01T00:00:02.000Z',
-            0,
             0,
             0,
             '2026-05-01T00:00:02.000Z',
@@ -2176,12 +2056,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'Literal 100x fix',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             NULL,
             NULL,
             NULL,
             NULL,
-            0,
             0,
             0,
             '2026-05-01T00:00:04.000Z',
@@ -2195,12 +2073,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'Archived search',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
-            'default',
             NULL,
             NULL,
             NULL,
             NULL,
-            0,
             0,
             0,
             '2026-05-01T00:00:06.000Z',
@@ -2495,13 +2371,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
     `;
     yield* sql`
       INSERT INTO projection_threads (
-        thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+        thread_id, project_id, title, model_selection_json, runtime_mode,
         latest_turn_id, pending_approval_count, pending_user_input_count,
-        has_actionable_proposed_plan, created_at, updated_at, deleted_at
+        created_at, updated_at, deleted_at
       )
       VALUES ('thread-w', 'project-w', 'Windowed thread',
-        '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
-        'turn-5', 0, 0, 0, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:10.000Z', NULL)
+        '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+        'turn-5', 0, 0, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:10.000Z', NULL)
     `;
 
     if (options?.importedMessageCount) {
@@ -3145,13 +3021,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       `;
       yield* sql`
         INSERT INTO projection_threads (
-          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
-          pending_approval_count, pending_user_input_count, has_actionable_proposed_plan,
+          thread_id, project_id, title, model_selection_json, runtime_mode,
+          pending_approval_count, pending_user_input_count,
           created_at, updated_at, deleted_at
         )
         VALUES ('thread-e', 'project-e', 'Turnless thread',
-          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
-          0, 0, 0, '2026-03-02T00:00:00.000Z', '2026-03-02T00:00:00.000Z', NULL)
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access',
+          0, 0, '2026-03-02T00:00:00.000Z', '2026-03-02T00:00:00.000Z', NULL)
       `;
       yield* sql`
         INSERT INTO projection_thread_messages (
@@ -3211,11 +3087,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery imported sources", (it) => {
     `;
     yield* sql`
       INSERT INTO projection_threads (
-        thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+        thread_id, project_id, title, model_selection_json, runtime_mode,
         created_at, updated_at
       ) VALUES (${threadId}, ${projectId}, 'Imported thread',
         ${encodeJson({ instanceId: source.providerInstanceId, model: "gpt-5-codex" })},
-        'full-access', 'default',
+        'full-access',
         ${timestamp}, ${timestamp})
     `;
     yield* sql`
@@ -3440,8 +3316,8 @@ it.effect("omits foreign-host PRs from legacy snapshots while preserving native 
     const query = yield* ProjectionSnapshotQuery;
     yield* sql`INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
       VALUES ('project-1', 'Project', '/repo', '[]', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z')`;
-    yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode, created_at, updated_at)
-      VALUES ('thread-1', 'project-1', 'Thread', '{"provider":"codex","model":"gpt-5"}', 'full-access', 'default', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z')`;
+    yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, runtime_mode, created_at, updated_at)
+      VALUES ('thread-1', 'project-1', 'Thread', '{"provider":"codex","model":"gpt-5"}', 'full-access', '2026-09-09T00:00:00Z', '2026-09-09T00:00:00Z')`;
     yield* sql`INSERT INTO projection_thread_pull_requests (thread_id, host, repository, number, url, source, linked_at)
       VALUES ('thread-1', 'github.enterprise.test', 'acme/web', 42, 'https://github.enterprise.test/acme/web/pull/42', 'manual', '2026-09-09T00:00:00Z')`;
     const readThreads = Effect.gen(function* () {
@@ -3480,15 +3356,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery activities by kind", (it) => {
       `;
       yield* sql`
         INSERT INTO projection_threads (
-          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          thread_id, project_id, title, model_selection_json, runtime_mode,
           created_at, updated_at, deleted_at
         ) VALUES
           ('thread-live', 'project-kinds', 'Live', '{"instanceId":"codex","model":"gpt-5"}',
-            'full-access', 'default', ${timestamp}, ${timestamp}, NULL),
+            'full-access', ${timestamp}, ${timestamp}, NULL),
           ('thread-gone', 'project-kinds', 'Gone', '{"instanceId":"codex","model":"gpt-5"}',
-            'full-access', 'default', ${timestamp}, ${timestamp}, ${timestamp}),
+            'full-access', ${timestamp}, ${timestamp}, ${timestamp}),
           ('thread-shelved', 'project-kinds', 'Shelved', '{"instanceId":"codex","model":"gpt-5"}',
-            'full-access', 'default', ${timestamp}, ${timestamp}, NULL)
+            'full-access', ${timestamp}, ${timestamp}, NULL)
       `;
       yield* sql`UPDATE projection_threads SET archived_at = ${timestamp} WHERE thread_id = 'thread-shelved'`;
       yield* sql`

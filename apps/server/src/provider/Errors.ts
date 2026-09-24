@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as Cause from "effect/Cause";
 
 import type { FallbackTrigger } from "@t3tools/contracts";
 
@@ -380,6 +381,45 @@ function readTag(error: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * User-facing one-line summary of a failure cause for turn/session error
+ * details (`provider.turn.start.failed` activities, `session.lastError`).
+ *
+ * Unlike `Cause.pretty`, this never includes server-internal JS stack traces:
+ * defects carry their construction stack (adapter internals, schema decode
+ * frames), which is unactionable noise in the timeline. The first failure or
+ * defect message is returned verbatim so upstream signals (429 rate limits,
+ * auth hints, retry advice) stay intact.
+ */
+export function toUserFacingFailureDetail(cause: Cause.Cause<unknown>): string {
+  for (const reason of cause.reasons) {
+    if (Cause.isFailReason(reason)) {
+      const message = readFailureMessage(reason.error);
+      if (message !== undefined) {
+        return message;
+      }
+    } else if (Cause.isDieReason(reason)) {
+      const message = readFailureMessage(reason.defect);
+      if (message !== undefined) {
+        return message;
+      }
+    }
+  }
+  return "The provider request failed before it could start. Try again or pick a different model.";
+}
+
+function readFailureMessage(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  if (value instanceof Error && typeof value.message === "string") {
+    const message = value.message.trim();
+    return message.length > 0 ? message : undefined;
+  }
+  return undefined;
 }
 
 /**

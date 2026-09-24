@@ -54,8 +54,8 @@ const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabili
 
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
-  showInteractionModeToggle: true,
   reportsContextWindow: true,
+  setup: { canAuthenticate: true, canInstall: false },
 } as const;
 function toTitleCaseWords(value: string): string {
   const parts: Array<string> = [];
@@ -117,6 +117,18 @@ function normalizeClaudeAuthMethod(authMethod: string | undefined): string | und
     return "apiKey";
   }
   return undefined;
+}
+
+/**
+ * The SDK explicitly reports `tokenSource: "none"` when no token backs the
+ * session (`claude auth status` agrees: `loggedIn: false`). Without this
+ * check every probe result — including a signed-out CLI — reads as
+ * authenticated, so sign-out can never stick in the UI.
+ */
+function isClaudeLoggedOutCapabilities(capabilities: {
+  readonly tokenSource: string | undefined;
+}): boolean {
+  return capabilities.tokenSource?.toLowerCase().replace(/[\s_-]+/g, "") === "none";
 }
 
 function formatClaudeSubscriptionAuthLabel(subscriptionType: string): string {
@@ -551,6 +563,24 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         status: "warning",
         auth: { status: "unknown" },
         message: "Could not verify Claude authentication status from initialization result.",
+      },
+    });
+  }
+
+  if (isClaudeLoggedOutCapabilities(capabilities)) {
+    return buildServerProvider({
+      presentation: CLAUDE_PRESENTATION,
+      enabled: claudeSettings.enabled,
+      checkedAt,
+      models,
+      slashCommands: dedupedSlashCommands,
+      skills,
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "error",
+        auth: { status: "unauthenticated" },
+        message: "Claude CLI is installed but not logged in. Run `claude auth login`.",
       },
     });
   }

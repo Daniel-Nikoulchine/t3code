@@ -7,10 +7,8 @@ import type {
   OrchestrationCheckpointSummary,
   OrchestrationLatestTurn,
   OrchestrationMessage,
-  OrchestrationProposedPlan,
   OrchestrationSession,
   ProjectScript as ContractProjectScript,
-  ProviderInteractionMode,
   RuntimeMode,
 } from "@t3tools/contracts";
 import type {
@@ -25,7 +23,6 @@ export { videoMimeType } from "@t3tools/shared/video";
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 
-export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;
 export const DEFAULT_THREAD_TERMINAL_ID = "term-1";
 export const MAX_TERMINALS_PER_GROUP = 4;
@@ -78,7 +75,6 @@ export interface ChatMessage extends Omit<OrchestrationMessage, "attachments"> {
   readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
 }
 
-export type ProposedPlan = OrchestrationProposedPlan;
 export type TurnDiffFileChange = OrchestrationCheckpointFile;
 export type TurnDiffSummary = OrchestrationCheckpointSummary;
 

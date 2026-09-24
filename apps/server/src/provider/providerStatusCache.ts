@@ -32,18 +32,27 @@ const mergeProviderModels = (
 /**
  * Built-in drivers in presentation order. Codex and Claude lead, the opt-in
  * providers follow, and unknown or fork drivers sort after every built-in.
+ *
+ * Exported so the catalog-consistency test can pin it against
+ * `BUILT_IN_DRIVERS`: every registered driver needs a rank here, otherwise
+ * it silently sinks to the end of the provider list.
  */
-const BUILT_IN_DRIVER_ORDER: ReadonlyArray<string> = [
+export const BUILT_IN_DRIVER_ORDER: ReadonlyArray<string> = [
   "codex",
   "claudeAgent",
   "cursor",
+  "cline",
   "devin",
+  "droid",
+  "freebuff",
   "grok",
   "deepseek",
   "kilo",
+  "minimax",
   "copilot",
   "hermes",
   "opencode",
+  "openclaw",
   "omp",
   "antigravity",
   "pi",

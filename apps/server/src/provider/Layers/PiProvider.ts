@@ -1,7 +1,6 @@
 import {
   type PiSettings,
   type ModelCapabilities,
-  type ServerProvider,
   type ServerProviderAuth,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
@@ -15,7 +14,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
-import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -27,10 +25,7 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "../providerMaintenance.ts";
+import { makeEnrichSnapshot } from "../providerMaintenance.ts";
 import { discoverPiSkills } from "../Drivers/PiSkills.ts";
 import {
   buildPiModelsFromDiscovery,
@@ -45,7 +40,6 @@ import { makePiRpcRuntime, type PiRpcError } from "../pi/PiRpcRuntime.ts";
 const PI_PRESENTATION = {
   displayName: "Pi",
   badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
   requiresNewThreadForModelChange: false,
 } as const;
 
@@ -129,10 +123,13 @@ interface PiDiscovery {
 /**
  * Discover pi models/commands via a short-lived ephemeral RPC process.
  * Never opens a browser login: `get_available_models` is read-only.
+ * Backend-wired instances pass the generated `t3-backend` extension so
+ * routed models are discovered with no Pi `/login`.
  */
 const discoverPiViaRpc = (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  extensionPaths?: ReadonlyArray<string>,
 ): Effect.Effect<
   {
     readonly models: ReadonlyArray<{
@@ -156,6 +153,7 @@ const discoverPiViaRpc = (
         cwd: process.cwd(),
         environment,
         ephemeral: true,
+        ...(extensionPaths && extensionPaths.length > 0 ? { extensionPaths } : {}),
       });
       const models = yield* runtime.getAvailableModels().pipe(Effect.orElseSucceed(() => []));
       const state = yield* runtime.getState().pipe(Effect.orElseSucceed(() => ({})));
@@ -219,6 +217,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
+  options?: { readonly extensionPaths?: ReadonlyArray<string> | undefined },
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -314,10 +313,11 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     Effect.orElseSucceed(() => []),
   );
 
-  const discoveryExit = yield* discoverPiViaRpc(piSettings, environment).pipe(
-    Effect.timeoutOption(PI_RPC_DISCOVERY_TIMEOUT_MS),
-    Effect.exit,
-  );
+  const discoveryExit = yield* discoverPiViaRpc(
+    piSettings,
+    environment,
+    options?.extensionPaths,
+  ).pipe(Effect.timeoutOption(PI_RPC_DISCOVERY_TIMEOUT_MS), Effect.exit);
   if (Exit.isFailure(discoveryExit)) {
     yield* Effect.logWarning("Pi RPC model discovery failed", {
       errorTag: causeErrorTag(discoveryExit.cause),
@@ -405,27 +405,6 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   });
 });
 
-export const enrichPiSnapshot = (input: {
-  readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
-  readonly enableProviderUpdateChecks?: boolean;
-  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
-  readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
-  const { snapshot, publishSnapshot } = input;
-
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
-    enableProviderUpdateChecks: input.enableProviderUpdateChecks,
-  }).pipe(
-    Effect.provideService(HttpClient.HttpClient, input.httpClient),
-    Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Pi version advisory enrichment failed", {
-        errorTag: causeErrorTag(cause),
-      }),
-    ),
-    Effect.asVoid,
-  );
-};
+export const enrichPiSnapshot = makeEnrichSnapshot("Pi");
 
 export { EMPTY_CAPABILITIES };

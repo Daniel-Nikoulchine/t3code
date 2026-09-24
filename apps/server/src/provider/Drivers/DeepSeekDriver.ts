@@ -1,4 +1,4 @@
-import { DeepSeekSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { DeepSeekSettings, ProviderDriverKind, type ModelBackendConfig } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,20 +19,20 @@ import {
   enrichDeepSeekSnapshot,
 } from "../Layers/DeepSeekProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
+  BACKEND_OVERLAYS,
+  resolveBackendModelSlugs,
+  resolveDeclaredBackendOverlay,
+} from "../ModelBackendEnvironment.ts";
+import { resolveHarnessProcessEnv } from "../harnessMaterial.ts";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 const decodeDeepSeekSettings = Schema.decodeSync(DeepSeekSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("deepseek");
@@ -40,6 +40,21 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
 });
+
+/**
+ * Backend env overlay for the dsh harness. dsh reads its LLM endpoint from
+ * `$DEEPSEEK_BASE_URL` (verified against the installed dsh-llm-deepseek:
+ * `baseURL ?? env(DEEPSEEK_BASE_URL) ?? https://api.deepseek.com`) and calls
+ * OpenAI-compatible `chat/completions` on it — it never reads the generic
+ * `OPENAI_BASE_URL`, so the shared overlay alone cannot steer it.
+ * Anthropic-only backends stay unset: dsh cannot speak that protocol.
+ */
+export function resolveDeepSeekBackendEnvironment(
+  backend: ModelBackendConfig | undefined,
+  baseEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return resolveDeclaredBackendOverlay(BACKEND_OVERLAYS.deepseek, backend, baseEnv);
+}
 
 export type DeepSeekDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
@@ -60,14 +75,47 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
   },
   configSchema: DeepSeekSettings,
   defaultConfig: (): DeepSeekSettings => decodeDeepSeekSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      // The backend overlay reaches the harness through the spawn env: the
+      // shared pairs plus dsh's own DEEPSEEK_BASE_URL. Without a backend the
+      // overlays are empty and direct mode is untouched.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: `Failed to read server settings for DeepSeek backend wiring: ${cause.message ?? String(cause)}`,
+              cause,
+            }),
+        ),
+      );
+      const processEnv = {
+        ...resolveHarnessProcessEnv({ environment, backend, baseEnv: process.env }).processEnv,
+        ...resolveDeepSeekBackendEnvironment(backend, process.env),
+      };
+      // Connection models ride the custom-model path into the snapshot list.
+      // A `t3-router` backend carries no `models` of its own, so its slugs
+      // come from the router's routes (same helper as Copilot).
+      const backendModels = resolveBackendModelSlugs({
+        backend,
+        routeKeys: Object.keys(settings.modelRouterRoutes ?? {}),
+      });
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -78,8 +126,16 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        backend,
+        nativeFallback,
       });
-      const effectiveConfig = { ...config, enabled } satisfies DeepSeekSettings;
+      const effectiveConfig = {
+        ...config,
+        enabled,
+        ...(backendModels.length > 0
+          ? { customModels: [...config.customModels, ...backendModels] }
+          : {}),
+      } satisfies DeepSeekSettings;
 
       const adapter = yield* makeDeepSeekAdapter(effectiveConfig, {
         environment: processEnv,
@@ -94,36 +150,19 @@ export const DeepSeekDriver: ProviderDriver<DeepSeekSettings, DeepSeekDriverEnv>
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<DeepSeekSettings>>(
-        {
-          resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
-          getSettings: snapshotSettings.getSettings,
-          streamSettings: snapshotSettings.streamSettings,
-          haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-          initialSnapshot: (settings) =>
-            buildInitialDeepSeekProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
-          checkProvider,
-          enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-            enrichDeepSeekSnapshot({
-              snapshot: currentSnapshot,
-              maintenanceCapabilities: MAINTENANCE_CAPABILITIES,
-              enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-              publishSnapshot,
-              httpClient,
-            }),
-        },
-      ).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build DeepSeek snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "DeepSeek snapshot",
+        effectiveConfig,
+        serverSettings,
+        resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
+        buildInitialSnapshot: (provider) =>
+          buildInitialDeepSeekProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
+        checkProvider,
+        enrichSnapshot: enrichDeepSeekSnapshot,
+        httpClient,
+      });
       const snapshotForCwd = (_workspaceCwd: string) => snapshot.getSnapshot;
 
       return {

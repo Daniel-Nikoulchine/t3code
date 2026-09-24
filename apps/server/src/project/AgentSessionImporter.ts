@@ -2,7 +2,6 @@ import {
   CommandId,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   AgentSessionImportProjectChangedError,
   AgentSessionImportProjectNotFoundError,
@@ -80,7 +79,6 @@ function hasImportBlockingActivity(
     thread.latestTurn !== null ||
     thread.session !== null ||
     thread.messages.some((message) => !isImportedAgentSessionMessageId(message.id)) ||
-    thread.proposedPlans.length > 0 ||
     thread.activities.length > 0 ||
     thread.checkpoints.length > 0 ||
     thread.snoozedUntil != null ||
@@ -249,7 +247,6 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
             title: thread.title,
             modelSelection: { instanceId: thread.providerInstanceId, model },
             runtimeMode: DEFAULT_RUNTIME_MODE,
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
             branch: null,
             worktreePath: null,
             createdAt: thread.createdAt,

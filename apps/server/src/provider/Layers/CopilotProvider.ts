@@ -1,7 +1,6 @@
 import {
   type CopilotSettings,
   type ModelCapabilities,
-  type ServerProvider,
   type ServerProviderAuth,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
@@ -14,7 +13,6 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -28,17 +26,13 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "../providerMaintenance.ts";
+import { makeEnrichSnapshot } from "../providerMaintenance.ts";
 import { COPILOT_KNOWN_MODELS, makeCopilotAcpRuntime } from "../acp/CopilotAcpSupport.ts";
 
 const COPILOT_PRESENTATION = {
   displayName: "Copilot",
   supportsConversationRollback: false,
   badgeLabel: "Early Access",
-  showInteractionModeToggle: true,
 } as const;
 
 const COPILOT_EFFORTS: ReadonlyArray<string> = [
@@ -450,25 +444,4 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
   });
 });
 
-export const enrichCopilotSnapshot = (input: {
-  readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
-  readonly enableProviderUpdateChecks?: boolean;
-  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
-  readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
-  const { snapshot, publishSnapshot } = input;
-
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
-    enableProviderUpdateChecks: input.enableProviderUpdateChecks,
-  }).pipe(
-    Effect.provideService(HttpClient.HttpClient, input.httpClient),
-    Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Copilot version advisory enrichment failed", {
-        errorTag: causeErrorTag(cause),
-      }),
-    ),
-    Effect.asVoid,
-  );
-};
+export const enrichCopilotSnapshot = makeEnrichSnapshot("Copilot");

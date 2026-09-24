@@ -331,7 +331,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
       title: "Run remote agent",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: null,
       worktreePath: null,
       pullRequests: [],
@@ -345,7 +344,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
       latestUserMessageAt: null,
       hasPendingApprovals: false,
       hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
     } satisfies Omit<OrchestrationThreadShell, "id">;
 
     expect(
@@ -475,7 +473,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           title: "Run remote agent",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           pullRequests: [],
@@ -504,7 +501,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           latestUserMessageAt: now,
           hasPendingApprovals: false,
           hasPendingUserInput: false,
-          hasActionableProposedPlan: false,
         } satisfies OrchestrationThreadShell;
 
         const orchestrationEngine = {
@@ -667,7 +663,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           title: "Run remote agent",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           pullRequests: [],
@@ -696,7 +691,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           latestUserMessageAt: now,
           hasPendingApprovals: false,
           hasPendingUserInput: false,
-          hasActionableProposedPlan: false,
         } satisfies OrchestrationThreadShell;
 
         const descriptor = {

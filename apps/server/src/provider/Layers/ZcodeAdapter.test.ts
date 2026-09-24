@@ -79,7 +79,6 @@ it("maps runtime modes onto ZCode session modes", () => {
   assert.equal(resolveZcodeMode({ runtimeMode: "approval-required" }), "build");
   assert.equal(resolveZcodeMode({ runtimeMode: "auto" }), "build");
   assert.equal(resolveZcodeMode({ runtimeMode: "auto-accept-edits" }), "edit");
-  assert.equal(resolveZcodeMode({ runtimeMode: "full-access", interactionMode: "plan" }), "plan");
 });
 
 it("selects permission option ids per approval decision", () => {

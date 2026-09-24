@@ -29,7 +29,6 @@ const baseThread: OrchestrationThread = {
   title: "Test Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
-  interactionMode: "default",
   branch: null,
   worktreePath: null,
   latestTurn: null,
@@ -41,7 +40,6 @@ const baseThread: OrchestrationThread = {
   pullRequests: [],
   deletedAt: null,
   messages: [],
-  proposedPlans: [],
   activities: [],
   checkpoints: [],
   session: null,
@@ -88,7 +86,6 @@ describe("applyThreadDetailEvent", () => {
           title: "New Thread",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: "main",
           worktreePath: null,
           createdAt: "2026-04-01T01:00:00.000Z",
@@ -1052,37 +1049,6 @@ describe("applyThreadDetailEvent", () => {
         },
       });
       expect(result.kind).toBe("unchanged");
-    });
-  });
-
-  describe("thread.proposed-plan-upserted", () => {
-    it("adds a proposed plan", () => {
-      const result = applyThreadDetailEvent(baseThread, {
-        ...baseEventFields,
-        sequence: 11,
-        occurredAt: "2026-04-01T10:00:00.000Z",
-        aggregateKind: "thread",
-        aggregateId: ThreadId.make("thread-1"),
-        type: "thread.proposed-plan-upserted",
-        payload: {
-          threadId: ThreadId.make("thread-1"),
-          proposedPlan: {
-            id: "plan-1",
-            turnId: TurnId.make("turn-1"),
-            planMarkdown: "## Plan\n- Do stuff",
-            implementedAt: null,
-            implementationThreadId: null,
-            createdAt: "2026-04-01T10:00:00.000Z",
-            updatedAt: "2026-04-01T10:00:00.000Z",
-          },
-        },
-      });
-
-      expect(result.kind).toBe("updated");
-      if (result.kind === "updated") {
-        expect(result.thread.proposedPlans).toHaveLength(1);
-        expect(result.thread.proposedPlans[0]?.id).toBe("plan-1");
-      }
     });
   });
 

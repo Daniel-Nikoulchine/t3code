@@ -13,7 +13,6 @@ import {
 import {
   CommandId,
   CheckpointRef,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
   ProjectId,
@@ -433,7 +432,6 @@ describe("CheckpointReactor", () => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: options?.threadBranch ?? null,
           worktreePath: options?.threadWorktreePath ?? cwd,
@@ -452,7 +450,6 @@ describe("CheckpointReactor", () => {
                     instanceId: ProviderInstanceId.make("codex"),
                     model: "gpt-5-codex",
                   },
-                  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
                   runtimeMode: "approval-required",
                   branch: null,
                   worktreePath: options?.threadWorktreePath ?? cwd,
@@ -1329,7 +1326,6 @@ describe("CheckpointReactor", () => {
             text: "continue",
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt,
         });
@@ -1398,7 +1394,6 @@ describe("CheckpointReactor", () => {
           text: "start turn",
           attachments: [],
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:00.000Z",
       }),
@@ -1632,7 +1627,6 @@ describe("CheckpointReactor", () => {
             text: `Keep message ${turnCount}`,
             attachments: [],
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt,
         });

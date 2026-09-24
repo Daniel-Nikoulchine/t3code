@@ -393,7 +393,6 @@ describe("thread outbox", () => {
         options: [{ id: "reasoningEffort", value: "xhigh" }],
       },
       runtimeMode: "approval-required",
-      interactionMode: "plan",
     } satisfies QueuedThreadMessage;
 
     expect(decodeQueuedThreadMessage(encodeQueuedThreadMessage(selectedMessage))).toEqual(
@@ -403,12 +402,10 @@ describe("thread outbox", () => {
       resolveQueuedThreadSettings(legacyMessage, {
         modelSelection: selectedMessage.modelSelection,
         runtimeMode: selectedMessage.runtimeMode,
-        interactionMode: selectedMessage.interactionMode,
       }),
     ).toEqual({
       modelSelection: selectedMessage.modelSelection,
       runtimeMode: selectedMessage.runtimeMode,
-      interactionMode: selectedMessage.interactionMode,
     });
   });
 
@@ -428,60 +425,28 @@ describe("thread outbox", () => {
     ).toBe(false);
   });
 
-  it("normalizes queued plan mode against the queued provider, not the current thread", () => {
+  it("prefers queued model selection over the current thread", () => {
     const codex = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" };
     const antigravity = {
       instanceId: ProviderInstanceId.make("google-personal"),
       model: "gemini-test-thinking",
       options: [{ id: "native-option", value: "keep-this-choice" }],
     };
-    const providers = [
-      { instanceId: codex.instanceId, showInteractionModeToggle: true },
-      { instanceId: antigravity.instanceId, showInteractionModeToggle: false },
-    ];
     const message = {
-      ...queuedMessage({ messageId: "queued-plan", createdAt: "2026-09-02T10:00:00.000Z" }),
-      text: "/plan inspect the project",
+      ...queuedMessage({ messageId: "queued", createdAt: "2026-09-02T10:00:00.000Z" }),
+      text: "inspect the project",
       modelSelection: antigravity,
-      interactionMode: "plan",
     } satisfies QueuedThreadMessage;
 
     expect(
-      resolveQueuedThreadSettings(
-        message,
-        { modelSelection: codex, runtimeMode: "approval-required", interactionMode: "plan" },
-        providers,
-      ),
+      resolveQueuedThreadSettings(message, {
+        modelSelection: codex,
+        runtimeMode: "approval-required",
+      }),
     ).toEqual({
       modelSelection: antigravity,
       runtimeMode: "approval-required",
-      interactionMode: "default",
     });
-    expect(
-      resolveQueuedThreadSettings(
-        { ...message, modelSelection: codex },
-        {
-          modelSelection: antigravity,
-          runtimeMode: "approval-required",
-          interactionMode: "default",
-        },
-        providers,
-      ).interactionMode,
-    ).toBe("plan");
-  });
-
-  it("normalizes a legacy queued message that inherits unsupported plan mode", () => {
-    const modelSelection = {
-      instanceId: ProviderInstanceId.make("google-personal"),
-      model: "gemini-test-thinking",
-    };
-    expect(
-      resolveQueuedThreadSettings(
-        queuedMessage({ messageId: "legacy-plan", createdAt: "2026-09-02T10:00:00.000Z" }),
-        { modelSelection, runtimeMode: "approval-required", interactionMode: "plan" },
-        [{ instanceId: modelSelection.instanceId, showInteractionModeToggle: false }],
-      ).interactionMode,
-    ).toBe("default");
   });
 
   it("backs off queued delivery retries and caps them at sixteen seconds", () => {

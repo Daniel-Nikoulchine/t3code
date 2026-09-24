@@ -8,7 +8,9 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 
-import { deriveProviderModelsForDisplay, ProviderInstanceCard } from "./ProviderInstanceCard";
+import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { deriveProviderModelsForDisplay } from "./providerInstanceCard.logic";
+import { getDriverOption } from "./providerDriverMeta";
 
 describe("deriveProviderModelsForDisplay", () => {
   it("uses current config custom models instead of stale live custom rows", () => {
@@ -82,6 +84,25 @@ describe("deriveProviderModelsForDisplay", () => {
     });
   });
 
+  it("carries server-managed connection models without a settings entry", () => {
+    const liveModels: ReadonlyArray<ServerProviderModel> = [
+      { slug: "gpt-5.5", name: "GPT-5.5", isCustom: false, capabilities: null },
+      {
+        slug: "glm-5",
+        name: "GLM-5",
+        isCustom: true,
+        viaConnection: true,
+        capabilities: null,
+      },
+      { slug: "stale", name: "Stale", isCustom: true, capabilities: null },
+    ];
+
+    const display = deriveProviderModelsForDisplay({ liveModels, customModels: [] });
+
+    expect(display.map((model) => model.slug)).toEqual(["gpt-5.5", "glm-5"]);
+    expect(display[1]?.viaConnection).toBe(true);
+  });
+
   it("shows a redacted provider email in the editor header status line", () => {
     const instanceId = ProviderInstanceId.make("codex");
     const driver = ProviderDriverKind.make("codex");
@@ -120,6 +141,46 @@ describe("deriveProviderModelsForDisplay", () => {
     expect(markup).toContain('aria-label="Toggle account email visibility"');
     expect(markup).toContain("blur-[2px]");
     expect(markup).not.toContain("developer@example.com");
+  });
+  it("keeps Harness configuration without sign-in or connection controls", () => {
+    const instanceId = ProviderInstanceId.make("codex");
+    const driver = ProviderDriverKind.make("codex");
+    const liveProvider: ServerProvider = {
+      instanceId,
+      driver,
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "unknown" },
+      checkedAt: "2026-08-27T12:00:00.000Z",
+      models: [],
+      slashCommands: [],
+      skills: [],
+    };
+    const props = {
+      instanceId,
+      instance: { driver },
+      driverOption: getDriverOption(driver),
+      liveProvider,
+      mode: "editor" as const,
+      onUpdate: () => undefined,
+      hiddenModels: [],
+      favoriteModels: [],
+      modelOrder: [],
+      onHiddenModelsChange: () => undefined,
+      onFavoriteModelsChange: () => undefined,
+      onModelOrderChange: () => undefined,
+    };
+
+    const full = renderToStaticMarkup(createElement(ProviderInstanceCard, props));
+    for (const title of ["Environment", "Models", "Runtime"]) {
+      expect(full).toContain(`>${title}</h2>`);
+    }
+    expect(full).not.toContain(">Sign in</h2>");
+    expect(full).not.toContain(">Connection</h2>");
+    expect(full).not.toContain("codex login");
+    expect(full).not.toContain("Own login");
   });
   it("surfaces a failed probe message in both the list row and the editor", () => {
     const instanceId = ProviderInstanceId.make("codex_work");

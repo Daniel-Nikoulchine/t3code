@@ -28,7 +28,6 @@ export type ComposerProviderStateInput = {
   models: ReadonlyArray<ServerProviderModel>;
   promptInjectionState?: ComposerPromptInjectionState;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
-  planModeEnabled: boolean;
 };
 
 export type ComposerPromptInjectionState = "none" | "ultrathink";
@@ -52,7 +51,6 @@ type TraitsRenderInput = {
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  planModeEnabled: boolean;
   size?: ComposerControlSize;
   hidden?: boolean;
   triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
@@ -93,31 +91,21 @@ function resolveComposerOptionSelections(
   model: string,
   provider: ProviderDriverKind,
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
-  planModeEnabled: boolean,
 ): {
   caps: ModelCapabilities;
   selections: ReadonlyArray<ProviderOptionSelection> | undefined;
 } {
-  const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
+  const caps = getProviderModelCapabilities(models, model, provider);
   return { caps, selections: withImplicitFastModeDefault(caps, modelOptions) };
 }
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
-  const {
-    provider,
-    model,
-    models,
-    modelOptions,
-    promptInjectionState = "none",
-    planModeEnabled,
-  } = input;
+  const { provider, model, models, modelOptions, promptInjectionState = "none" } = input;
   if (provider === "opencode") {
     const normalizedModel = normalizeModelSlug(model, provider);
     const modelIsInCatalog = models.some((candidate) => candidate.slug === normalizedModel);
     if (!modelIsInCatalog) {
-      const preservedOptions = modelOptions?.filter(
-        (option) => planModeEnabled || option.id !== "agent" || option.value !== "plan",
-      );
+      const preservedOptions = modelOptions;
       return {
         provider,
         promptEffort: null,
@@ -131,7 +119,6 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     model,
     provider,
     modelOptions,
-    planModeEnabled,
   );
   const descriptors = getProviderOptionDescriptors({ caps, selections });
   const primarySelectDescriptor = descriptors.find(
@@ -175,7 +162,6 @@ function renderTraitsControl(
     modelOptions,
     prompt,
     onPromptChange,
-    planModeEnabled,
     size,
     hidden,
     triggerVariant,
@@ -188,7 +174,6 @@ function renderTraitsControl(
     model,
     provider,
     modelOptions,
-    planModeEnabled,
   );
   if (
     !hasTarget ||
@@ -198,7 +183,6 @@ function renderTraitsControl(
       model,
       modelOptions: resolvedModelOptions,
       prompt,
-      planModeEnabled,
     })
   ) {
     return null;
@@ -214,7 +198,6 @@ function renderTraitsControl(
       modelOptions={resolvedModelOptions}
       prompt={prompt}
       onPromptChange={onPromptChange}
-      planModeEnabled={planModeEnabled}
       {...(size !== undefined ? { size } : {})}
       {...(hidden !== undefined ? { hidden } : {})}
       {...(triggerVariant !== undefined ? { triggerVariant } : {})}

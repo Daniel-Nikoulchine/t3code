@@ -29,7 +29,6 @@ function makeThread(environmentId: EnvironmentId, instanceId: string): Environme
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make(instanceId), model: "gpt-5.4" },
     runtimeMode: "full-access",
-    interactionMode: "default",
     branch: null,
     worktreePath: null,
     latestTurn: null,
@@ -42,7 +41,6 @@ function makeThread(environmentId: EnvironmentId, instanceId: string): Environme
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
-    hasActionableProposedPlan: false,
   } as unknown as EnvironmentThreadShell;
 }
 

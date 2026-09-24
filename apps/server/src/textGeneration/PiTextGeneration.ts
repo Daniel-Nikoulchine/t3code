@@ -32,6 +32,7 @@ const isTextGenerationError = Schema.is(TextGenerationError);
 export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  extensionPaths: ReadonlyArray<string> = [],
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -63,6 +64,9 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
         "-p",
         "--no-session",
         "--no-tools",
+        ...extensionPaths.flatMap((extensionPath) =>
+          extensionPath.trim() ? ["--extension", extensionPath.trim()] : [],
+        ),
         "--thinking",
         thinking,
         ...(parsed.provider ? ["--provider", parsed.provider] : []),

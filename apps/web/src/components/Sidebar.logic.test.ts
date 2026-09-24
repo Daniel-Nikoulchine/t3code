@@ -60,7 +60,6 @@ import {
 } from "@t3tools/contracts";
 
 import {
-  DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   type Project,
   type SidebarThreadSummary,
@@ -327,10 +326,8 @@ describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {
     expect(
       hasUnseenCompletion({
-        hasActionableProposedPlan: false,
         hasPendingApprovals: false,
         hasPendingUserInput: false,
-        interactionMode: "default",
         latestTurn: makeLatestTurn(),
         lastVisitedAt: "2026-03-09T10:04:00.000Z",
         session: null,
@@ -341,10 +338,8 @@ describe("hasUnseenCompletion", () => {
   it("treats a missing client visit marker as read", () => {
     expect(
       hasUnseenCompletion({
-        hasActionableProposedPlan: false,
         hasPendingApprovals: false,
         hasPendingUserInput: false,
-        interactionMode: "default",
         latestTurn: makeLatestTurn(),
         lastVisitedAt: undefined,
         session: null,
@@ -1923,10 +1918,8 @@ describe("formatWorkingDurationLabel", () => {
 
 describe("resolveThreadStatusPill", () => {
   const baseThread = {
-    hasActionableProposedPlan: false,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
-    interactionMode: "plan" as const,
     latestTurn: null,
     lastVisitedAt: undefined,
     session: {
@@ -1953,7 +1946,7 @@ describe("resolveThreadStatusPill", () => {
     ).toMatchObject({ label: "Pending Approval", pulse: false });
   });
 
-  it("shows awaiting input when plan mode is blocked on user answers", () => {
+  it("shows awaiting input when blocked on user answers", () => {
     expect(
       resolveThreadStatusPill({
         thread: {
@@ -1970,23 +1963,6 @@ describe("resolveThreadStatusPill", () => {
         thread: baseThread,
       }),
     ).toMatchObject({ label: "Working", pulse: true });
-  });
-
-  it("shows plan ready when a settled plan turn has a proposed plan ready for follow-up", () => {
-    expect(
-      resolveThreadStatusPill({
-        thread: {
-          ...baseThread,
-          hasActionableProposedPlan: true,
-          latestTurn: makeLatestTurn(),
-          session: {
-            ...baseThread.session,
-            status: "ready",
-            activeTurnId: null,
-          },
-        },
-      }),
-    ).toMatchObject({ label: "Plan Ready", pulse: false });
   });
 
   it("does not manufacture completed state without a client visit marker", () => {
@@ -2010,7 +1986,6 @@ describe("resolveThreadStatusPill", () => {
       resolveThreadStatusPill({
         thread: {
           ...baseThread,
-          interactionMode: "default",
           latestTurn: makeLatestTurn(),
           lastVisitedAt: "2026-03-09T10:04:00.000Z",
           session: {
@@ -2076,7 +2051,7 @@ describe("resolveProjectStatusIndicator", () => {
     ).toMatchObject({ label: "Pending Approval", dotClass: "bg-amber-500" });
   });
 
-  it("prefers plan-ready over completed when no stronger action is needed", () => {
+  it("prefers working over completed when no stronger action is needed", () => {
     expect(
       resolveProjectStatusIndicator([
         {
@@ -2086,13 +2061,13 @@ describe("resolveProjectStatusIndicator", () => {
           pulse: false,
         },
         {
-          label: "Plan Ready",
-          colorClass: "text-violet-600",
-          dotClass: "bg-violet-500",
-          pulse: false,
+          label: "Working",
+          colorClass: "text-sky-600",
+          dotClass: "bg-sky-500",
+          pulse: true,
         },
       ]),
-    ).toMatchObject({ label: "Plan Ready", dotClass: "bg-violet-500" });
+    ).toMatchObject({ label: "Working", dotClass: "bg-sky-500" });
   });
 });
 
@@ -2128,10 +2103,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
       ...overrides?.modelSelection,
     },
     runtimeMode: DEFAULT_RUNTIME_MODE,
-    interactionMode: DEFAULT_INTERACTION_MODE,
     session: null,
     messages: [],
-    proposedPlans: [],
     createdAt: "2026-03-09T10:00:00.000Z",
     archivedAt: null,
     settledOverride: null,

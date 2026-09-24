@@ -110,6 +110,12 @@ export interface PiRpcRuntimeOptions {
   readonly modelId?: string | undefined;
   readonly thinkingLevel?: PiThinkingLevel | undefined;
   readonly appendSystemPrompts?: ReadonlyArray<string> | undefined;
+  /**
+   * Extension files loaded via `pi --extension` (e.g. the generated
+   * `t3-backend` model-routing provider). Pi loads them before startup
+   * finishes, so registered providers are visible to `get_available_models`.
+   */
+  readonly extensionPaths?: ReadonlyArray<string> | undefined;
 }
 
 export interface PiRpcRuntime {
@@ -146,12 +152,16 @@ export function buildPiRpcSpawnArgs(options: {
   readonly modelId?: string | undefined;
   readonly thinkingLevel?: PiThinkingLevel | undefined;
   readonly appendSystemPrompts?: ReadonlyArray<string> | undefined;
+  readonly extensionPaths?: ReadonlyArray<string> | undefined;
 }): ReadonlyArray<string> {
   const args = ["--mode", "rpc"];
   if (options.ephemeral) {
     args.push("--no-session");
   } else if (options.sessionDir?.trim()) {
     args.push("--session-dir", options.sessionDir.trim());
+  }
+  for (const extensionPath of options.extensionPaths ?? []) {
+    if (extensionPath.trim()) args.push("--extension", extensionPath.trim());
   }
   if (options.provider?.trim()) args.push("--provider", options.provider.trim());
   if (options.modelId?.trim()) args.push("--model", options.modelId.trim());

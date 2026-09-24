@@ -11,6 +11,7 @@ import {
   allocateBackendConnectionId,
   applyProviderPreset,
   countConnectionReferences,
+  inferBackendConnectionDriverKind,
   nextInstanceWithConnectionId,
   removeBackendConnection,
   resolveInstanceConnectionState,
@@ -114,6 +115,11 @@ describe("allocateBackendConnectionId", () => {
     expect(allocateBackendConnectionId("t3-router", new Set(["t3-router-2"]))).toBe("t3-router-3");
   });
 
+  it("never allocates the reserved harness backend bucket id", () => {
+    expect(allocateBackendConnectionId("t3-backend", new Set())).toBe("t3-backend-2");
+    expect(allocateBackendConnectionId("T3 Backend", new Set())).toBe("t3-backend-2");
+  });
+
   it("keeps suffixed ids within 64 chars", () => {
     const base = "a".repeat(64);
     const allocated = allocateBackendConnectionId(base, new Set([base]));
@@ -141,6 +147,10 @@ describe("validateBackendConnectionId", () => {
 
   it("rejects the reserved built-in router id", () => {
     expect(validateBackendConnectionId("t3-router")).toContain("reserved");
+  });
+
+  it("rejects the reserved harness backend bucket id", () => {
+    expect(validateBackendConnectionId("t3-backend")).toContain("reserved");
   });
 });
 
@@ -314,12 +324,12 @@ describe("applyProviderPreset", () => {
     });
   });
 
-  it("leaves the key name blank for keyless local presets", () => {
-    const ollama = PROVIDER_PRESET_LIST.find((preset) => preset.id === "ollama")!;
-    expect(applyProviderPreset(ollama)).toEqual({
-      baseUrl: "http://127.0.0.1:11434/v1",
+  it("leaves the key name blank for the custom slate", () => {
+    const custom = PROVIDER_PRESET_LIST.find((preset) => preset.id === "custom")!;
+    expect(applyProviderPreset(custom)).toEqual({
+      baseUrl: "",
       apiKeyEnv: "",
-      displayName: "Ollama",
+      displayName: "",
     });
   });
 
@@ -330,5 +340,85 @@ describe("applyProviderPreset", () => {
       expect(typeof draft.apiKeyEnv).toBe("string");
       expect(typeof draft.displayName).toBe("string");
     }
+  });
+});
+
+describe("inferBackendConnectionDriverKind", () => {
+  it("maps OpenCode Go endpoints to the opencode brand icon", () => {
+    expect(
+      String(
+        inferBackendConnectionDriverKind({
+          connectionId: "opencode-go",
+          connection: {
+            baseUrl: "https://opencode.ai/zen/go/v1",
+            displayName: "OpenCode Go",
+          },
+          credentialVendor: "opencode-go",
+        }),
+      ),
+    ).toBe("opencode");
+  });
+
+  it("maps the Codex OAuth endpoint to the codex brand icon", () => {
+    expect(
+      String(
+        inferBackendConnectionDriverKind({
+          connectionId: "codex-oauth",
+          connection: {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            displayName: "ChatGPT account (Codex OAuth)",
+            codexAccountInstanceId: "codex",
+          },
+        }),
+      ),
+    ).toBe("codex");
+  });
+
+  it("maps chatgpt/codex names without an OAuth link to codex", () => {
+    expect(
+      String(
+        inferBackendConnectionDriverKind({
+          connectionId: "chatgpt",
+          connection: {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            displayName: "ChatGPT account",
+          },
+        }),
+      ),
+    ).toBe("codex");
+  });
+
+  it("maps freebuff and codebuff connection names to freebuff", () => {
+    expect(
+      String(
+        inferBackendConnectionDriverKind({
+          connectionId: "freebuff",
+          connection: {
+            baseUrl: "https://www.codebuff.com/api",
+            displayName: "Freebuff",
+          },
+        }),
+      ),
+    ).toBe("freebuff");
+    expect(
+      String(
+        inferBackendConnectionDriverKind({
+          connectionId: "codebuff",
+          connection: {
+            baseUrl: "https://www.codebuff.com/api",
+            displayName: "Codebuff",
+          },
+        }),
+      ),
+    ).toBe("freebuff");
+  });
+
+  it("keeps genuinely custom endpoints on the initials fallback", () => {
+    expect(
+      inferBackendConnectionDriverKind({
+        connectionId: "proxy",
+        connection: { baseUrl: "https://proxy.example/v1", displayName: "Proxy" },
+      }),
+    ).toBeNull();
   });
 });

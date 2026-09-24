@@ -14,6 +14,7 @@ import {
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
+import { resolveThreadStatusKind } from "@t3tools/client-runtime/state/thread-status";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -112,42 +113,28 @@ export function resolveThreadListV2SnoozeGateExpiryMs(
 export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
-/**
- * The flat Thread List v2 is the default on every app variant; the Settings →
- * Legacy toggle opts a device back into the grouped legacy list. Preferences
- * persist as sparse patches, so `undefined` genuinely means "never chosen".
- *
- * `preferencesLoaded` guards the startup window: preferences load
- * asynchronously, and rendering one list before the stored choice arrives would
- * remount the whole thing a tick later. While loading, hold the default — that
- * is where every device without an explicit legacy opt-in lands anyway.
- */
-export function resolveThreadListV2Enabled(input: {
-  readonly legacyPreference: boolean | undefined;
-  readonly preferencesLoaded: boolean;
-}): boolean {
-  if (!input.preferencesLoaded) {
-    return true;
-  }
-  return input.legacyPreference !== true;
-}
-
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
+  thread: Pick<
+    EnvironmentThreadShell,
+    "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
+  >,
 ): ThreadListV2Status {
-  if (thread.hasPendingApprovals) {
-    return "approval";
+  // Shared decision; the list badge collapses starting into working and has
+  // no monitoring state, so both map to working (nearest live signal).
+  switch (resolveThreadStatusKind(thread)) {
+    case "approval":
+      return "approval";
+    case "input":
+      return "input";
+    case "working":
+    case "connecting":
+    case "monitoring":
+      return "working";
+    case "failed":
+      return "failed";
+    case "ready":
+      return "ready";
   }
-  if (thread.hasPendingUserInput) {
-    return "input";
-  }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
-    return "working";
-  }
-  if (thread.session?.status === "error") {
-    return "failed";
-  }
-  return "ready";
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not

@@ -11,7 +11,7 @@
  *
  * @module provider/Drivers/CopilotDriver
  */
-import { CopilotSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { CopilotSettings, ProviderDriverKind, type ModelBackendConfig } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -32,7 +32,7 @@ import {
   enrichCopilotSnapshot,
 } from "../Layers/CopilotProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -40,13 +40,12 @@ import {
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
-import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import {
-  haveProviderSnapshotSettingsChanged,
-  makeProviderSnapshotSettingsSource,
-  type ProviderSnapshotSettings,
-} from "../providerUpdateSettings.ts";
+  BACKEND_OVERLAYS,
+  resolveBackendModelSlugs,
+  resolveDeclaredBackendOverlay,
+} from "../ModelBackendEnvironment.ts";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
 
@@ -55,6 +54,25 @@ const MAINTENANCE_CAPABILITIES = makeManualOnlyProviderMaintenanceCapabilities({
   provider: DRIVER_KIND,
   packageName: null,
 });
+
+/**
+ * Backend env overlay for the Copilot CLI's BYOK mode. Copilot reads its
+ * model endpoint from `COPILOT_PROVIDER_*` (verified against
+ * `copilot help providers`: base URL activates BYOK, type picks the wire,
+ * GitHub auth is skipped entirely). The generic `OPENAI_*`/`ANTHROPIC_*`
+ * overlay does not reach it, so a backend must map onto these names.
+ *
+ * OpenAI wire only: like the DeepSeek and Grok drivers this overlay stays
+ * empty for Anthropic-only endpoints (unverified path, no live proof), so a
+ * linked Anthropic-only backend leaves the instance on its GitHub login
+ * instead of flipping it into a BYOK mode whose models could never resolve.
+ */
+export function resolveCopilotBackendEnvironment(
+  backend: ModelBackendConfig | undefined,
+  baseEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return resolveDeclaredBackendOverlay(BACKEND_OVERLAYS.copilot, backend, baseEnv);
+}
 
 export type CopilotDriverEnv =
   | BackgroundPolicy.BackgroundPolicy
@@ -75,16 +93,43 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
   },
   configSchema: CopilotSettings,
   defaultConfig: (): CopilotSettings => decodeCopilotSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      // BYOK serves the slugs the backend declares; a `t3-router` backend has
+      // no `models` of its own, so its slugs come from the router's routes.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: `Failed to read server settings for Copilot backend wiring: ${cause.message ?? String(cause)}`,
+              cause,
+            }),
+        ),
+      );
+      const backendModelSlugs = resolveBackendModelSlugs({
+        backend,
+        routeKeys: Object.keys(settings.modelRouterRoutes ?? {}),
+      });
+      const backendOverlay = resolveCopilotBackendEnvironment(backend, process.env);
       const processEnv = {
         ...mergeProviderInstanceEnvironment(environment),
-        ...resolveModelBackendEnvironment(backend, process.env),
+        ...backendOverlay,
       };
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -96,9 +141,18 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
-        ...(backend === undefined ? {} : { backend }),
+        backend,
+        nativeFallback,
       });
-      const effectiveConfig = { ...config, enabled } satisfies CopilotSettings;
+      // Backend models ride the custom-model path into the snapshot list so
+      // they become pickable alongside the harness's own models.
+      const effectiveConfig = {
+        ...config,
+        enabled,
+        ...(backendModelSlugs.length > 0
+          ? { customModels: [...config.customModels, ...backendModelSlugs] }
+          : {}),
+      } satisfies CopilotSettings;
       const adapter = yield* makeCopilotAdapter(effectiveConfig, {
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
@@ -112,34 +166,19 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
 
-      const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
-      const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<CopilotSettings>>({
+      const snapshot = yield* makeManagedDriverSnapshot({
+        driverKind: DRIVER_KIND,
+        instanceId,
+        displayLabel: "Copilot snapshot",
+        effectiveConfig,
+        serverSettings,
         resolveMaintenance: () => Effect.succeed(MAINTENANCE_CAPABILITIES),
-        getSettings: snapshotSettings.getSettings,
-        streamSettings: snapshotSettings.streamSettings,
-        haveSettingsChanged: haveProviderSnapshotSettingsChanged,
-        initialSnapshot: (settings) =>
-          buildInitialCopilotProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
+        buildInitialSnapshot: (provider) =>
+          buildInitialCopilotProviderSnapshot(provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          enrichCopilotSnapshot({
-            snapshot: currentSnapshot,
-            maintenanceCapabilities: MAINTENANCE_CAPABILITIES,
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-            publishSnapshot,
-            httpClient,
-          }),
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: `Failed to build Copilot snapshot: ${cause.message ?? String(cause)}`,
-              cause,
-            }),
-        ),
-      );
+        enrichSnapshot: enrichCopilotSnapshot,
+        httpClient,
+      });
 
       return {
         instanceId,

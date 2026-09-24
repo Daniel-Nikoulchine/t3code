@@ -1,6 +1,5 @@
 import {
   CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
   ProjectId,
@@ -406,7 +405,6 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: null,
           worktreePath: null,
@@ -430,7 +428,6 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
             { id: "reasoningEffort", value: "high" },
             { id: "fastMode", value: true },
           ]),
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: now,
         },
@@ -503,7 +500,6 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
             instanceId: ProviderInstanceId.make("codex"),
             model: "gpt-5-codex",
           },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
@@ -532,84 +528,6 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         payload: {
           threadId: ThreadId.make("thread-1"),
           runtimeMode: "approval-required",
-        },
-      });
-    }),
-  );
-
-  it.effect("emits thread.interaction-mode-set from thread.interaction-mode.set", () =>
-    Effect.gen(function* () {
-      const now = "2026-01-01T00:00:00.000Z";
-      const initial = createEmptyReadModel(now);
-      const withProject = yield* projectEvent(initial, {
-        sequence: 1,
-        eventId: asEventId("evt-project-create"),
-        aggregateKind: "project",
-        aggregateId: asProjectId("project-1"),
-        type: "project.created",
-        occurredAt: now,
-        commandId: CommandId.make("cmd-project-create"),
-        causationEventId: null,
-        correlationId: CommandId.make("cmd-project-create"),
-        metadata: {},
-        payload: {
-          projectId: asProjectId("project-1"),
-          title: "Project",
-          workspaceRoot: "/tmp/project",
-          defaultModelSelection: null,
-          scripts: [],
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
-      const readModel = yield* projectEvent(withProject, {
-        sequence: 2,
-        eventId: asEventId("evt-thread-create"),
-        aggregateKind: "thread",
-        aggregateId: ThreadId.make("thread-1"),
-        type: "thread.created",
-        occurredAt: now,
-        commandId: CommandId.make("cmd-thread-create"),
-        causationEventId: null,
-        correlationId: CommandId.make("cmd-thread-create"),
-        metadata: {},
-        payload: {
-          threadId: ThreadId.make("thread-1"),
-          projectId: asProjectId("project-1"),
-          title: "Thread",
-          modelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: "gpt-5-codex",
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-          updatedAt: now,
-        },
-      });
-
-      const result = yield* decideOrchestrationCommand({
-        command: {
-          type: "thread.interaction-mode.set",
-          commandId: CommandId.make("cmd-interaction-mode-set"),
-          threadId: ThreadId.make("thread-1"),
-          interactionMode: "plan",
-          createdAt: now,
-        },
-        readModel,
-      });
-
-      const singleResult = Array.isArray(result) ? null : result;
-      if (singleResult === null) {
-        throw new Error("Expected a single interaction-mode-set event.");
-      }
-      expect(singleResult).toMatchObject({
-        type: "thread.interaction-mode-set",
-        payload: {
-          threadId: ThreadId.make("thread-1"),
-          interactionMode: "plan",
         },
       });
     }),

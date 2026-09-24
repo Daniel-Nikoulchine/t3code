@@ -45,12 +45,20 @@ export type ProviderCompaction<TError> =
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
+   * `"unsupported"` is live: ProviderCommandReactor restarts the session for
+   * a model change when it sees it. Every built-in adapter currently declares
+   * `"in-session"`, so adding a new adapter with `"unsupported"` exercises a
+   * path no built-in covers — test it through the reactor, not the adapter.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
   /** Starts a resumed turn with no synthetic user prompt. Omitted means the
       adapter needs an explicit continuation instruction. */
   readonly promptlessTurnContinuation?: boolean;
-  /** False when native conversation history cannot be rewound. */
+  /**
+   * False when native conversation history cannot be rewound (ProviderService
+   * rejects the rewind before touching files). Omitted means the adapter
+   * supports rollback — there is no third state.
+   */
   readonly supportsConversationRollback?: boolean;
 }
 

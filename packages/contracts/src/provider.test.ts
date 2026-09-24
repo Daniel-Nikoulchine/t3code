@@ -11,6 +11,7 @@ import {
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
 } from "./provider.ts";
+import { ServerProviderModel } from "./server.ts";
 
 const decodeProviderSessionStartInput = Schema.decodeUnknownSync(ProviderSessionStartInput);
 const decodeProviderSendTurnInput = Schema.decodeUnknownSync(ProviderSendTurnInput);
@@ -286,5 +287,29 @@ describe("providerInstanceId routing key (slice-2 invariant)", () => {
         runtimeMode: "full-access",
       }),
     ).toThrow();
+  });
+});
+
+describe("ServerProviderModel connection provenance", () => {
+  const decodeModel = Schema.decodeUnknownSync(ServerProviderModel);
+  it("leaves native models unmarked", () => {
+    const model = decodeModel({
+      slug: "gpt-5.5",
+      name: "GPT-5.5",
+      isCustom: false,
+      capabilities: null,
+    });
+    expect(model.viaConnection).toBeUndefined();
+  });
+
+  it("marks connection-served models", () => {
+    const model = decodeModel({
+      slug: "glm-5",
+      name: "GLM-5",
+      isCustom: true,
+      viaConnection: true,
+      capabilities: null,
+    });
+    expect(model.viaConnection).toBe(true);
   });
 });

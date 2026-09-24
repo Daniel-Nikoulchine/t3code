@@ -40,6 +40,13 @@ it("builds rpc spawn args for sessions and one-shot overrides", () => {
   ]);
   assert.deepStrictEqual(
     buildPiRpcSpawnArgs({
+      ephemeral: true,
+      extensionPaths: ["  ", "/tmp/t3-backend.js"],
+    }),
+    ["--mode", "rpc", "--no-session", "--extension", "/tmp/t3-backend.js"],
+  );
+  assert.deepStrictEqual(
+    buildPiRpcSpawnArgs({
       sessionDir: "/tmp/pi-sessions",
       provider: "openai",
       modelId: "gpt-5-nano",

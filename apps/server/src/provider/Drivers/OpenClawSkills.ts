@@ -19,12 +19,9 @@
  */
 import type { OpenClawSettings, ServerProviderSkill } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { ChildProcess } from "effect/unstable/process";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
-import { spawnAndCollect } from "../providerSnapshot.ts";
+import { runCliJsonProbe } from "../cliProbe.ts";
 
 const OPENCLAW_SKILLS_PROBE_TIMEOUT_MS = 4_000;
 const SKILL_MENTION_PATTERN = /(^|\s)\$([a-zA-Z][a-zA-Z0-9:_-]*)(?=\s|$)/g;
@@ -109,52 +106,21 @@ export const discoverOpenClawSkills = Effect.fn("discoverOpenClawSkills")(functi
   cwd?: string,
 ) {
   const command = openclawSettings.binaryPath || "openclaw";
-  const inspectResult = yield* Effect.gen(function* () {
-    const spawnCommand = yield* resolveSpawnCommand(command, ["skills", "list", "--json"], {
-      env: environment,
-    });
-    return yield* spawnAndCollect(
-      command,
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        ...(cwd ? { cwd } : {}),
-        env: environment,
-        shell: spawnCommand.shell,
+  return yield* runCliJsonProbe({
+    command,
+    args: ["skills", "list", "--json"],
+    environment,
+    ...(cwd ? { cwd } : {}),
+    timeoutMs: OPENCLAW_SKILLS_PROBE_TIMEOUT_MS,
+    makeError: (input) =>
+      new OpenClawSkillsProbeError({
+        stage: input.stage,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.exitCode !== undefined ? { exitCode: input.exitCode } : {}),
+        ...(input.cause !== undefined ? { cause: input.cause } : {}),
       }),
-    );
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new OpenClawSkillsProbeError({
-          stage: "spawn",
-          ...(cwd ? { cwd } : {}),
-          cause,
-        }),
-    ),
-    Effect.timeoutOption(OPENCLAW_SKILLS_PROBE_TIMEOUT_MS),
-  );
-
-  if (Option.isNone(inspectResult)) {
-    return yield* new OpenClawSkillsProbeError({
-      stage: "timeout",
-      ...(cwd ? { cwd } : {}),
-    });
-  }
-  const output = inspectResult.value;
-  if (output.code !== 0) {
-    return yield* new OpenClawSkillsProbeError({
-      stage: "exit",
-      ...(cwd ? { cwd } : {}),
-      exitCode: output.code,
-    });
-  }
-  const skills = decodeOpenClawSkillsList(output.stdout);
-  if (!skills) {
-    return yield* new OpenClawSkillsProbeError({
-      stage: "decode",
-      ...(cwd ? { cwd } : {}),
-    });
-  }
-  return skills;
+    decode: decodeOpenClawSkillsList,
+  });
 });
 
 /** OpenClaw invokes skills natively as `/name`; T3 composers insert `$name`. */

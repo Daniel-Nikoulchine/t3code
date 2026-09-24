@@ -38,6 +38,7 @@ import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { AntigravityInstallation } from "../AntigravityInstallation.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import { ModelRouterProxy } from "../router/ModelRouterProxy.ts";
 import * as CodexResetCredit from "./codexResetCredit.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
@@ -781,6 +782,81 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           mergeProviderSnapshot(previousProvider, refreshedProvider).skills,
           previousProvider.skills,
         );
+      });
+
+      it("drops stale MiniMax models missing from a successful refresh", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("minimax"),
+          driver: ProviderDriverKind.make("minimax"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-09-21T00:00:00.000Z",
+          version: "0.4.12",
+          models: [
+            {
+              slug: "m:custom_provider%3At3-backend:opencode-go%2Fkimi-k3:v:thinking",
+              name: "opencode-go/kimi-k3 · thinking",
+              subProvider: "opencode-go",
+              isCustom: false,
+              capabilities: null,
+            },
+            {
+              slug: "m:custom_provider%3At3-backend:opencode-go%2Fkimi-k3:v:",
+              name: "opencode-go/kimi-k3",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const refreshedProvider = {
+          ...previousProvider,
+          checkedAt: "2026-09-21T00:01:00.000Z",
+          models: [previousProvider.models[0]],
+        } satisfies ServerProvider;
+
+        assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+          ...refreshedProvider.models,
+        ]);
+      });
+
+      it("retains stale MiniMax models when a refresh fails", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("minimax"),
+          driver: ProviderDriverKind.make("minimax"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-09-21T00:00:00.000Z",
+          version: "0.4.12",
+          models: [
+            {
+              slug: "m:custom_provider%3At3-backend:opencode-go%2Fkimi-k3:v:thinking",
+              name: "opencode-go/kimi-k3 · thinking",
+              subProvider: "opencode-go",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const refreshedProvider = {
+          ...previousProvider,
+          status: "error",
+          auth: { status: "unknown" },
+          checkedAt: "2026-09-21T00:01:00.000Z",
+          models: [],
+          message: "MiniMax CLI is installed but the ACP probe failed. Refresh provider status.",
+        } satisfies ServerProvider;
+
+        assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+          ...previousProvider.models,
+        ]);
       });
 
       it("classifies pending, logout, uninstall, and reconnect OpenCode inventories", () => {
@@ -2272,6 +2348,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            // Routerless harness: the stub keeps router-linked instances native.
+            Layer.provideMerge(
+              Layer.succeed(ModelRouterProxy, ModelRouterProxy.of({ baseUrl: undefined })),
+            ),
             Layer.provideMerge(AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2374,6 +2454,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            // Routerless harness: the stub keeps router-linked instances native.
+            Layer.provideMerge(
+              Layer.succeed(ModelRouterProxy, ModelRouterProxy.of({ baseUrl: undefined })),
+            ),
             Layer.provideMerge(AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2490,6 +2574,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
             Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            // Routerless harness: the stub keeps router-linked instances native.
+            Layer.provideMerge(
+              Layer.succeed(ModelRouterProxy, ModelRouterProxy.of({ baseUrl: undefined })),
+            ),
             Layer.provideMerge(AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2552,6 +2640,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
             const providerRegistryLayer = ProviderRegistryLive.pipe(
               Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+              // Routerless harness: the stub keeps router-linked instances native.
+              Layer.provideMerge(
+                Layer.succeed(ModelRouterProxy, ModelRouterProxy.of({ baseUrl: undefined })),
+              ),
               Layer.provideMerge(AntigravityInstallation.layer),
               Layer.provideMerge(
                 Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2616,13 +2708,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 "claudeAgent",
                 "cline",
                 "codex",
+                "copilot",
                 "cursor",
                 "deepseek",
                 "devin",
                 "droid",
+                "freebuff",
                 "grok",
                 "hermes",
                 "kilo",
+                "minimax",
                 "omp",
                 "openclaw",
                 "opencode",
@@ -2938,6 +3033,36 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   stdout: '{"loggedIn":true,"authMethod":"api-key"}\n',
                   stderr: "",
                   code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("returns unauthenticated when the SDK reports no token source", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({ tokenSource: "none", apiProvider: "firstParty" }),
+          );
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.installed, true);
+          assert.strictEqual(status.auth.status, "unauthenticated");
+          assert.strictEqual(
+            status.message,
+            "Claude CLI is installed but not logged in. Run `claude auth login`.",
+          );
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":false,"authMethod":"none"}\n',
+                  stderr: "",
+                  code: 1,
                 };
               throw new Error(`Unexpected args: ${joined}`);
             }),

@@ -45,6 +45,13 @@ const ModelBackendConfigBase = Schema.Struct({
   ),
   /** Model slugs the endpoint serves; merged into referencing instances' model lists. */
   models: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  /**
+   * Codex OAuth account backend: set when the referenced connection names a
+   * `codexAccountInstanceId`. Codex's own sign-in authenticates the proxied
+   * requests, so the home layout emits `requires_openai_auth` instead of an
+   * `env_key` (mirrors `ModelProxyConfig.codexAccountInstanceId`).
+   */
+  codexAccountInstanceId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 const requiresBaseUrlForOpenAiCompatible = Schema.makeFilter(
@@ -70,6 +77,8 @@ export type ModelBackendConfig = typeof ModelBackendConfig.Type;
  * variable, or `apiKeyCredentialId` references `ServerSettings.modelCredentials`.
  */
 export const ModelProxyConfig = Schema.Struct({
+  /** Codex owns this account's OAuth login and refresh. No token is stored here. */
+  codexAccountInstanceId: Schema.optionalKey(TrimmedNonEmptyString),
   // Include the API prefix, e.g. https://host/v1 — the probe calls GET {baseUrl}/models.
   baseUrl: TrimmedNonEmptyString,
   apiKeyEnv: Schema.optional(TrimmedNonEmptyString),

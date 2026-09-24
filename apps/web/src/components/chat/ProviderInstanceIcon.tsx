@@ -12,8 +12,8 @@ import { cn } from "~/lib/utils";
 export { providerInstanceInitials };
 
 /**
- * Title presentation shared by the Harness instance editor
- * (`ProviderInstanceCard`) and the backend-centric Providers tab: the
+ * Title presentation for the provider instance editor
+ * (`ProviderInstanceCard`): the
  * display-name fallback order (explicit name, then driver label, then the
  * raw driver slug), the normalized accent color, and the narrowed driver
  * kind for the icon. Pure so the fallback order stays pinned by unit test.
@@ -38,8 +38,7 @@ export function resolveProviderInstanceTitle(input: {
 /**
  * Header glyph for one provider instance title: the brand icon with its
  * accent badge when the driver narrows to a driver kind, else the driver's
- * fallback glyph, else the display-name initials. Same classes everywhere
- * so the Harness editor and the Providers tab render identical titles.
+ * fallback glyph, else the display-name initials.
  */
 export function ProviderInstanceTitleIcon(props: {
   readonly displayName: string;

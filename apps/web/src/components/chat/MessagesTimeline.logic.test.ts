@@ -111,7 +111,7 @@ describe("streaming row projection", () => {
         sourceActivityKind: "tool.completed",
       },
     ];
-    const timeline = deriveTimelineEntriesWithState(messages, [], work);
+    const timeline = deriveTimelineEntriesWithState(messages, work);
     const input = {
       timelineEntries: timeline.entries,
       latestTurn: { turnId, state: "running", startedAt: time(5), completedAt: null },
@@ -140,14 +140,14 @@ describe("streaming row projection", () => {
       ...initial.messages.slice(0, -1),
       { ...last, text: after, updatedAt: initial.time(8) },
     ];
-    const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+    const timeline = deriveTimelineEntriesWithState(messages, initial.work, initial.timeline);
     const input = { ...initial.input, timelineEntries: timeline.entries };
     const next = deriveMessagesTimelineRowsWithState(input, previous);
 
     expect(next.rows).toEqual(
       deriveMessagesTimelineRows({
         ...input,
-        timelineEntries: deriveTimelineEntries(messages, [], initial.work),
+        timelineEntries: deriveTimelineEntries(messages, initial.work),
       }),
     );
     for (const [index, row] of previous.rows.entries()) {
@@ -166,7 +166,7 @@ describe("streaming row projection", () => {
     const last = initial.messages.at(-1)!;
     const branch = (text: string) => {
       const messages = [...initial.messages.slice(0, -1), { ...last, text }];
-      const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+      const timeline = deriveTimelineEntriesWithState(messages, initial.work, initial.timeline);
       const input = { ...initial.input, timelineEntries: timeline.entries };
       const projection = deriveMessagesTimelineRowsWithState(input, previous);
       expect(projection.rows).toEqual(deriveMessagesTimelineRows(input));
@@ -216,7 +216,7 @@ describe("streaming row projection", () => {
         });
       };
       const firstMessages = materialize(source, "https://first.test/image");
-      const firstTimeline = deriveTimelineEntriesWithState(firstMessages, [], initial.work);
+      const firstTimeline = deriveTimelineEntriesWithState(firstMessages, initial.work);
       const input = { ...initial.input, timelineEntries: firstTimeline.entries };
       const previous = deriveMessagesTimelineRowsWithState(input);
       const saved = structuredClone(previous.rows);
@@ -224,7 +224,6 @@ describe("streaming row projection", () => {
       const nextMessages = materialize(nextSource, "https://first.test/image");
       const nextTimeline = deriveTimelineEntriesWithState(
         nextMessages,
-        [],
         initial.work,
         firstTimeline,
       );
@@ -245,12 +244,7 @@ describe("streaming row projection", () => {
 
       if (kind === "image" || kind === "streaming-image") {
         const renewed = materialize(nextSource, "https://renewed.test/image");
-        const renewedTimeline = deriveTimelineEntriesWithState(
-          renewed,
-          [],
-          initial.work,
-          nextTimeline,
-        );
+        const renewedTimeline = deriveTimelineEntriesWithState(renewed, initial.work, nextTimeline);
         const renewedInput = { ...input, timelineEntries: renewedTimeline.entries };
         const renewedRows = deriveMessagesTimelineRowsWithState(renewedInput, next);
         expect(renewedRows.rows).toEqual(deriveMessagesTimelineRows(renewedInput));
@@ -299,7 +293,7 @@ describe("streaming row projection", () => {
     );
     const last = initial.messages.at(-1)!;
     const messages = [...initial.messages.slice(0, -1), { ...last, text: "Partial token" }];
-    const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+    const timeline = deriveTimelineEntriesWithState(messages, initial.work, initial.timeline);
     const nextInput = {
       ...input,
       timelineEntries: timeline.entries,
@@ -391,7 +385,6 @@ describe("streaming row projection", () => {
       title: "Long thread",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: null,
       pullRequests: [],
       worktreePath: null,
@@ -410,7 +403,6 @@ describe("streaming row projection", () => {
         ...history.flatMap(({ user, assistant }) => [user, assistant]),
         ...initial.messages,
       ],
-      proposedPlans: [],
       activities: [],
       checkpoints: history.map(({ checkpoint }) => checkpoint),
       session: null,
@@ -430,12 +422,7 @@ describe("streaming row projection", () => {
       const selected = registry.get(details.detailAtom(ref));
       if (selected === null) throw new Error("Missing thread detail");
       const messages = selected.messages.map((message) => preview(message, () => imageUrl));
-      timeline = deriveTimelineEntriesWithState(
-        messages,
-        selected.proposedPlans,
-        initial.work,
-        timeline,
-      );
+      timeline = deriveTimelineEntriesWithState(messages, initial.work, timeline);
       projection = deriveMessagesTimelineRowsWithState(
         {
           timelineEntries: timeline.entries,
@@ -546,13 +533,13 @@ describe("streaming row projection", () => {
               ? { ...last, role: "user", turnId: null }
               : { ...last, createdAt: initial.time(0) };
       const messages = [...initial.messages.slice(0, -1), changed];
-      const timeline = deriveTimelineEntriesWithState(messages, [], initial.work, initial.timeline);
+      const timeline = deriveTimelineEntriesWithState(messages, initial.work, initial.timeline);
       const nextInput = { ...input, timelineEntries: timeline.entries };
       const next = deriveMessagesTimelineRowsWithState(nextInput, previous);
       expect(next.rows).toEqual(
         deriveMessagesTimelineRows({
           ...nextInput,
-          timelineEntries: deriveTimelineEntries(messages, [], initial.work),
+          timelineEntries: deriveTimelineEntries(messages, initial.work),
         }),
       );
       expect(previous.rows).toEqual(deriveMessagesTimelineRows(input));
@@ -569,13 +556,13 @@ describe("streaming row projection", () => {
     const check = (changes: Partial<typeof input> = {}) => {
       const oldRows = structuredClone(projection.rows);
       const previous = projection;
-      timeline = deriveTimelineEntriesWithState(messages, [], work, timeline);
+      timeline = deriveTimelineEntriesWithState(messages, work, timeline);
       input = { ...input, ...changes, timelineEntries: timeline.entries };
       projection = deriveMessagesTimelineRowsWithState(input, previous);
       expect(projection.rows).toEqual(
         deriveMessagesTimelineRows({
           ...input,
-          timelineEntries: deriveTimelineEntries(messages, [], work),
+          timelineEntries: deriveTimelineEntries(messages, work),
         }),
       );
       expect(previous.rows).toEqual(oldRows);
@@ -1324,7 +1311,6 @@ describe("deriveMessagesTimelineRows", () => {
             updatedAt: "2026-01-01T00:00:06Z",
           },
         ],
-        [],
         [
           {
             id: "spawn-entry",
@@ -2961,7 +2947,7 @@ describe("deriveMessagesTimelineRows", () => {
       sourceActivityKind: "tool.completed",
     }));
     const input = {
-      timelineEntries: deriveTimelineEntries([], [], [...tools, answer]),
+      timelineEntries: deriveTimelineEntries([], [...tools, answer]),
       latestTurn: { turnId, state: "completed", startedAt: time(0), completedAt: time(6) },
       isWorking: false,
       activeTurnStartedAt: null,

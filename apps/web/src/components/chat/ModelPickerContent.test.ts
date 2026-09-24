@@ -15,6 +15,8 @@ import {
   resolveModelPickerSelectedModel,
   shouldIncludeModelPickerOption,
   shouldOfferModelPickerSetup,
+  toggleLogicalModelFavorite,
+  type ModelFavoriteEntry,
 } from "./ModelPickerContent";
 import {
   LOGICAL_LEGACY_SECTION_KEY,
@@ -236,7 +238,7 @@ describe("buildLogicalModelPickerItems", () => {
   const optionsMap = (entries: ReturnType<typeof deriveProviderInstanceEntries>) =>
     new Map(entries.map((entry) => [entry.instanceId, entry.models] as const));
 
-  it("pools same-slug pairings across instances and marks the active selection", () => {
+  it("keeps only the scoped Harness instance for a shared model", () => {
     const entries = deriveProviderInstanceEntries([
       snapshot({
         instanceId: "codex",
@@ -261,6 +263,7 @@ describe("buildLogicalModelPickerItems", () => {
       instanceEntries: entries,
       activeInstanceId: ProviderInstanceId.make("codex_personal"),
       activeModel: "gpt-5.6-sol",
+      scopeProviderKey: "codex_personal",
     });
 
     expect(items).toHaveLength(1);
@@ -270,10 +273,81 @@ describe("buildLogicalModelPickerItems", () => {
       isLegacy: false,
       isActive: true,
     });
+    expect(items[0]?.sources.map((source) => source.instanceId)).toEqual(["codex_personal"]);
+  });
+
+  it("keeps every ready source when the favorites tab is the scope", () => {
+    const entries = deriveProviderInstanceEntries([
+      snapshot({
+        instanceId: "codex",
+        driver: "codex",
+        models: [model("gpt-5.6-sol", "GPT-5.6 Sol")],
+      }),
+      snapshot({
+        instanceId: "codex_personal",
+        driver: "codex",
+        models: [model("gpt-5.6-sol", "GPT-5.6 Sol")],
+      }),
+    ]);
+
+    const items = buildLogicalModelPickerItems({
+      logicalModels: [
+        logicalModel("gpt-5.6-sol", "GPT-5.6 Sol", [
+          { instanceId: "codex" },
+          { instanceId: "codex_personal" },
+        ]),
+      ],
+      modelOptionsByInstance: optionsMap(entries),
+      instanceEntries: entries,
+      activeInstanceId: ProviderInstanceId.make("codex_personal"),
+      activeModel: "gpt-5.6-sol",
+      scopeProviderKey: "favorites",
+    });
+
     expect(items[0]?.sources.map((source) => source.instanceId)).toEqual([
       "codex",
       "codex_personal",
     ]);
+  });
+
+  it("keeps linked connection sources on the scoped Harness and drops other instances", () => {
+    const entries = deriveProviderInstanceEntries([
+      snapshot({
+        instanceId: "codex",
+        driver: "codex",
+        models: [model("relay-model", "Relay Model")],
+      }),
+      snapshot({
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        models: [model("relay-model", "Relay Model")],
+      }),
+    ]);
+    const relayModel: LogicalModel = {
+      modelId: "relay-model",
+      displayName: "Relay Model",
+      sources: [
+        { instanceId: "codex", model: "relay-model", via: "connection", authMode: "api-key" },
+        { instanceId: "claudeAgent", model: "relay-model", via: "connection", authMode: "api-key" },
+      ],
+      gaps: [],
+    };
+
+    const items = buildLogicalModelPickerItems({
+      logicalModels: [relayModel],
+      modelOptionsByInstance: new Map([
+        [ProviderInstanceId.make("codex"), [{ slug: "relay-model", name: "Relay Model" }]],
+        [ProviderInstanceId.make("claudeAgent"), [{ slug: "relay-model", name: "Relay Model" }]],
+      ]),
+      instanceEntries: entries,
+      activeInstanceId: ProviderInstanceId.make("codex"),
+      activeModel: "relay-model",
+      scopeProviderKey: "codex",
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.sources.map((source) => source.instanceId)).toEqual(["codex"]);
+    expect(items[0]).toMatchObject({ isActive: true });
   });
 
   it("drops sources on instances that are not picker-ready", () => {
@@ -295,9 +369,196 @@ describe("buildLogicalModelPickerItems", () => {
       instanceEntries: entries,
       activeInstanceId: ProviderInstanceId.make("codex"),
       activeModel: "m1",
+      scopeProviderKey: "favorites",
     });
 
     expect(items[0]?.sources.map((source) => source.instanceId)).toEqual(["codex"]);
+  });
+
+  it("limits every scope to the active harness when scopeToActiveInstance is set", () => {
+    const entries = deriveProviderInstanceEntries([
+      snapshot({ instanceId: "minimax", driver: "minimax", models: [model("m1", "M1")] }),
+      snapshot({ instanceId: "cline", driver: "cline", models: [model("m1", "M1")] }),
+    ]);
+
+    const items = buildLogicalModelPickerItems({
+      logicalModels: [
+        logicalModel("m1", "M1", [{ instanceId: "minimax" }, { instanceId: "cline" }]),
+      ],
+      modelOptionsByInstance: optionsMap(entries),
+      instanceEntries: entries,
+      activeInstanceId: ProviderInstanceId.make("minimax"),
+      activeModel: "m1",
+      scopeProviderKey: "favorites",
+      scopeToActiveInstance: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.sources.map((source) => source.instanceId)).toEqual(["minimax"]);
+  });
+
+  it("pools a router-upstream scope across ready harnesses", () => {
+    const routed = (slug: string, subProvider: string): ServerProvider["models"][number] => ({
+      slug,
+      name: slug,
+      isCustom: false,
+      capabilities: null,
+      subProvider,
+    });
+    const entries = deriveProviderInstanceEntries([
+      snapshot({
+        instanceId: "minimax",
+        driver: "minimax",
+        models: [
+          routed("t3-backend/opencode-go/k1", "opencode-go"),
+          model("native-m1", "Native M1"),
+        ],
+      }),
+      snapshot({
+        instanceId: "kilo",
+        driver: "kilo",
+        models: [routed("t3-backend/opencode-go/k1", "opencode-go")],
+      }),
+    ]);
+
+    const items = buildLogicalModelPickerItems({
+      logicalModels: [
+        {
+          modelId: "t3-backend/opencode-go/k1",
+          displayName: "k1",
+          sources: [
+            {
+              instanceId: "minimax",
+              model: "t3-backend/opencode-go/k1",
+              via: "native",
+              authMode: "api-key",
+            },
+            {
+              instanceId: "kilo",
+              model: "t3-backend/opencode-go/k1",
+              via: "native",
+              authMode: "api-key",
+            },
+          ],
+          gaps: [],
+        },
+      ],
+      modelOptionsByInstance: optionsMap(entries),
+      instanceEntries: entries,
+      activeInstanceId: ProviderInstanceId.make("minimax"),
+      activeModel: "t3-backend/opencode-go/k1",
+      scopeProviderKey: "opencode-go",
+      scopeToActiveInstance: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.sources.map((source) => source.instanceId)).toEqual(["minimax", "kilo"]);
+  });
+
+  it("drops unready harnesses from a router-upstream scope", () => {
+    const routed = (slug: string, subProvider: string): ServerProvider["models"][number] => ({
+      slug,
+      name: slug,
+      isCustom: false,
+      capabilities: null,
+      subProvider,
+    });
+    const entries = deriveProviderInstanceEntries([
+      snapshot({
+        instanceId: "minimax",
+        driver: "minimax",
+        models: [routed("t3-backend/opencode-go/k1", "opencode-go")],
+      }),
+      snapshot({
+        instanceId: "kilo",
+        driver: "kilo",
+        status: "error",
+        models: [routed("t3-backend/opencode-go/k1", "opencode-go")],
+      }),
+    ]);
+
+    const items = buildLogicalModelPickerItems({
+      logicalModels: [
+        {
+          modelId: "t3-backend/opencode-go/k1",
+          displayName: "k1",
+          sources: [
+            {
+              instanceId: "minimax",
+              model: "t3-backend/opencode-go/k1",
+              via: "native",
+              authMode: "api-key",
+            },
+            {
+              instanceId: "kilo",
+              model: "t3-backend/opencode-go/k1",
+              via: "native",
+              authMode: "api-key",
+            },
+          ],
+          gaps: [],
+        },
+      ],
+      modelOptionsByInstance: optionsMap(entries),
+      instanceEntries: entries,
+      activeInstanceId: ProviderInstanceId.make("minimax"),
+      activeModel: "t3-backend/opencode-go/k1",
+      scopeProviderKey: "opencode-go",
+      scopeToActiveInstance: true,
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.sources.map((source) => source.instanceId)).toEqual(["minimax"]);
+  });
+
+  it("covers routed models in the active harness's instance scope", () => {
+    const routed = (slug: string, subProvider: string): ServerProvider["models"][number] => ({
+      slug,
+      name: slug,
+      isCustom: false,
+      capabilities: null,
+      subProvider,
+    });
+    const entries = deriveProviderInstanceEntries([
+      snapshot({
+        instanceId: "minimax",
+        driver: "minimax",
+        models: [
+          routed("t3-backend/opencode-go/k1", "opencode-go"),
+          model("native-m1", "Native M1"),
+        ],
+      }),
+    ]);
+
+    const items = buildLogicalModelPickerItems({
+      logicalModels: [
+        logicalModel("native-m1", "Native M1", [{ instanceId: "minimax" }]),
+        {
+          modelId: "t3-backend/opencode-go/k1",
+          displayName: "k1",
+          sources: [
+            {
+              instanceId: "minimax",
+              model: "t3-backend/opencode-go/k1",
+              via: "native",
+              authMode: "api-key",
+            },
+          ],
+          gaps: [],
+        },
+      ],
+      modelOptionsByInstance: optionsMap(entries),
+      instanceEntries: entries,
+      activeInstanceId: ProviderInstanceId.make("minimax"),
+      activeModel: "native-m1",
+      scopeProviderKey: "minimax",
+      scopeToActiveInstance: true,
+    });
+
+    expect(items.map((item) => item.modelId).sort()).toEqual([
+      "native-m1",
+      "t3-backend/opencode-go/k1",
+    ]);
   });
 
   it("keeps the active selection reachable as a synthetic item when the catalog cannot see it", () => {
@@ -317,6 +578,7 @@ describe("buildLogicalModelPickerItems", () => {
       instanceEntries: entries,
       activeInstanceId: ProviderInstanceId.make("opencode_work"),
       activeModel: "missing/model",
+      scopeProviderKey: "opencode_work",
     });
 
     expect(items).toHaveLength(1);
@@ -346,6 +608,7 @@ describe("buildLogicalModelPickerItems", () => {
       instanceEntries: entries,
       activeInstanceId: ProviderInstanceId.make("codex"),
       activeModel: "shared",
+      scopeProviderKey: "favorites",
       lockedProvider: ProviderDriverKind.make("codex"),
     });
 
@@ -375,6 +638,7 @@ describe("buildLogicalModelPickerItems", () => {
       instanceEntries: entries,
       activeInstanceId: ProviderInstanceId.make("codex"),
       activeModel: "new",
+      scopeProviderKey: "codex",
     });
 
     expect(items.find((item) => item.modelId === "old-model")?.isLegacy).toBe(true);
@@ -453,72 +717,104 @@ describe("shouldOfferModelPickerSetup", () => {
 });
 
 describe("adjacentModelPickerProvider", () => {
-  const codex = entry("ready", "codex");
-  const claude = entry("ready", "claudeAgent");
-  const unavailable = entry("error");
-  const input = {
-    entries: [codex, unavailable, claude],
-    disabledInstanceIds: undefined,
-    selectableUnavailableInstanceIds: undefined,
-  };
+  const providerKeys = ["codex", "opencode_work", "claudeagent"];
 
-  it("wraps through favorites and ready instances, skipping unavailable providers", () => {
+  it("wraps through favorites and ready providers", () => {
+    expect(adjacentModelPickerProvider({ providerKeys, selectedKey: "codex", direction: 1 })).toBe(
+      "opencode_work",
+    );
     expect(
-      adjacentModelPickerProvider({ ...input, selectedInstanceId: codex.instanceId, direction: 1 }),
-    ).toBe(claude.instanceId);
+      adjacentModelPickerProvider({ providerKeys, selectedKey: "favorites", direction: -1 }),
+    ).toBe("claudeagent");
     expect(
-      adjacentModelPickerProvider({ ...input, selectedInstanceId: "favorites", direction: -1 }),
-    ).toBe(claude.instanceId);
-    expect(
-      adjacentModelPickerProvider({
-        ...input,
-        selectedInstanceId: claude.instanceId,
-        direction: 1,
-      }),
+      adjacentModelPickerProvider({ providerKeys, selectedKey: "claudeagent", direction: 1 }),
     ).toBe("favorites");
   });
 
-  it("keeps thread locks and the selected unavailable catalog", () => {
+  it("skips disabled keys by excluding them from providerKeys", () => {
+    const withDisabledExcluded = providerKeys.filter((key) => key !== "opencode_work");
     expect(
       adjacentModelPickerProvider({
-        ...input,
-        disabledInstanceIds: new Set([claude.instanceId]),
-        selectedInstanceId: codex.instanceId,
+        providerKeys: withDisabledExcluded,
+        selectedKey: "codex",
         direction: 1,
       }),
-    ).toBe("favorites");
-    expect(
-      adjacentModelPickerProvider({
-        ...input,
-        selectableUnavailableInstanceIds: new Set([unavailable.instanceId]),
-        selectedInstanceId: codex.instanceId,
-        direction: 1,
-      }),
-    ).toBe(unavailable.instanceId);
+    ).toBe("claudeagent");
   });
 
   it("handles an empty catalog and a removed selection in either direction", () => {
     expect(
       adjacentModelPickerProvider({
-        ...input,
-        entries: [],
-        selectedInstanceId: codex.instanceId,
+        providerKeys: [],
+        selectedKey: "codex",
         direction: -1,
       }),
     ).toBe("favorites");
     expect(
       adjacentModelPickerProvider({
-        ...input,
-        selectedInstanceId: unavailable.instanceId,
+        providerKeys,
+        selectedKey: "removed",
         direction: 1,
       }),
     ).toBe("favorites");
     expect(
       adjacentModelPickerProvider({
-        ...input,
-        selectedInstanceId: unavailable.instanceId,
+        providerKeys,
+        selectedKey: "removed",
         direction: -1,
       }),
-    ).toBe(claude.instanceId);
+    ).toBe("claudeagent");
+  });
+});
+
+describe("toggleLogicalModelFavorite", () => {
+  const favorite = (provider: string, model: string): ModelFavoriteEntry => ({
+    provider: ProviderInstanceId.make(provider),
+    model,
+  });
+
+  it("favorites every serving pairing of a multi-source model at once", () => {
+    const item = logicalModel("gpt-6-luna", "GPT-6-Luna", [
+      { instanceId: "codex" },
+      { instanceId: "opencode_go" },
+    ]);
+    expect(toggleLogicalModelFavorite([], item)).toEqual([
+      favorite("codex", "gpt-6-luna"),
+      favorite("opencode_go", "gpt-6-luna"),
+    ]);
+  });
+
+  it("keeps unrelated favorites and only adds the missing pairings", () => {
+    const item = logicalModel("gpt-6-luna", "GPT-6-Luna", [
+      { instanceId: "codex" },
+      { instanceId: "opencode_go" },
+    ]);
+    expect(
+      toggleLogicalModelFavorite(
+        [favorite("t3-backend", "other"), favorite("codex", "gpt-6-luna")],
+        item,
+      ),
+    ).toEqual([
+      favorite("t3-backend", "other"),
+      favorite("codex", "gpt-6-luna"),
+      favorite("opencode_go", "gpt-6-luna"),
+    ]);
+  });
+
+  it("clears every pairing when the whole set is already favorited", () => {
+    const item = logicalModel("gpt-6-luna", "GPT-6-Luna", [
+      { instanceId: "codex" },
+      { instanceId: "opencode_go" },
+    ]);
+    expect(
+      toggleLogicalModelFavorite(
+        [
+          favorite("t3-backend", "other"),
+          favorite("codex", "gpt-6-luna"),
+          favorite("opencode_go", "gpt-6-luna"),
+        ],
+        item,
+      ),
+    ).toEqual([favorite("t3-backend", "other")]);
   });
 });

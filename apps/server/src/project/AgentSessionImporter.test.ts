@@ -123,7 +123,6 @@ const makeProjectedThread = (input: {
     title: sourceThread.title,
     modelSelection: { instanceId: sourceThread.providerInstanceId, model: "default" },
     runtimeMode: "full-access",
-    interactionMode: "default",
     pullRequests: [],
     branch: null,
     worktreePath: null,
@@ -160,7 +159,6 @@ const makeProjectedThread = (input: {
             : []),
         ]
       : [],
-    proposedPlans: [],
     activities: [],
     checkpoints: [],
     session: null,
@@ -726,7 +724,6 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           title: "Legacy import",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "default" },
           runtimeMode: "full-access",
-          interactionMode: "default",
           branch: null,
           worktreePath: null,
           createdAt: "2026-08-24T10:00:00.000Z",
@@ -972,7 +969,6 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
             },
             modelSelection: importedThread.modelSelection,
             runtimeMode: importedThread.runtimeMode,
-            interactionMode: importedThread.interactionMode,
             createdAt: "2026-08-24T10:02:00.000Z",
           });
           yield* Deferred.await(turnSent);
@@ -1161,7 +1157,6 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
         title: "Turn race",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "default" },
         runtimeMode: "full-access",
-        interactionMode: "default",
         branch: null,
         worktreePath: null,
         createdAt: "2026-08-24T10:00:00.000Z",
@@ -1193,7 +1188,6 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           attachments: [],
         },
         runtimeMode: "full-access",
-        interactionMode: "default",
         createdAt: "2026-08-24T10:02:00.000Z",
       });
       yield* Deferred.succeed(releaseImporter, undefined);

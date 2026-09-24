@@ -42,14 +42,12 @@ import {
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
+import { resolveHarnessProcessEnv } from "../harnessMaterial.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
   normalizeCommandPath,
-  resolveProviderMaintenanceCapabilitiesEffect,
+  resolveDriverMaintenance,
 } from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -97,7 +95,16 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
   },
   configSchema: OpenCodeSettings,
   defaultConfig: (): OpenCodeSettings => decodeOpenCodeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -111,8 +118,11 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       // env. A backend additionally injects a `t3-backend` provider entry into
       // OPENCODE_CONFIG_CONTENT so the endpoint's models are selectable as
       // `t3-backend/<slug>`; the merge preserves the user's own config content.
-      const instanceEnv = mergeProviderInstanceEnvironment(environment);
-      const backendEnv = resolveModelBackendEnvironment(backend, process.env);
+      const { instanceEnv, backendOverlay: backendEnv } = resolveHarnessProcessEnv({
+        environment,
+        backend,
+        baseEnv: process.env,
+      });
       const backendConfigContent =
         backend === undefined
           ? undefined
@@ -138,19 +148,15 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
-        ...(backend === undefined ? {} : { backend }),
+        backend,
+        nativeFallback,
       });
       const effectiveConfig = { ...config, enabled } satisfies OpenCodeSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, pathService),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: UPDATE,
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
         instanceId,

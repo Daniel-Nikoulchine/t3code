@@ -7,7 +7,7 @@ shared provider settings.
 To run Claude against an Anthropic-compatible endpoint with a stored API key
 instead of your subscription login, attach the instance to a model backend
 connection in Settings → Providers. See
-[Providers](./providers.md#model-backend-connections) — the environment-variable
+[Providers](./providers.md#api-providers) — the environment-variable
 setups below still work.
 
 ## Separate accounts or configurations

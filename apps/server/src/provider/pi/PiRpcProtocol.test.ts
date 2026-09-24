@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   buildPromptCommand,
+  buildPiModelsFromDiscovery,
   deltaFromMessageUpdate,
   extractSkillNames,
   extractSlashCommands,
@@ -196,5 +197,37 @@ describe("PiRpcProtocol", () => {
     expect(isPiThinkingLevel("ultra")).toBe(false);
     expect(splitProviderModel("openai/gpt-4o")).toEqual({ provider: "openai", modelId: "gpt-4o" });
     expect(splitProviderModel("gpt-4o")).toEqual({ modelId: "gpt-4o" });
+  });
+
+  it("never surfaces the t3-backend harness bucket as subProvider", () => {
+    const models = buildPiModelsFromDiscovery({
+      models: [
+        { id: "gpt-5.6", provider: "t3-backend" },
+        { id: "opencode-go/kimi-k3", provider: "t3-backend" },
+        { id: "claude-opus-4-7", provider: "anthropic" },
+      ],
+    });
+    expect(models.map(({ slug, name, subProvider }) => ({ slug, name, subProvider }))).toEqual([
+      { slug: "t3-backend/gpt-5.6", name: "gpt-5.6", subProvider: undefined },
+      {
+        slug: "t3-backend/opencode-go/kimi-k3",
+        name: "kimi-k3",
+        subProvider: "opencode-go",
+      },
+      {
+        slug: "anthropic/claude-opus-4-7",
+        name: "claude-opus-4-7",
+        subProvider: "anthropic",
+      },
+    ]);
+  });
+
+  it("degrades a stale bucket-prefixed discovery id to the bare model", () => {
+    const models = buildPiModelsFromDiscovery({
+      models: [{ id: "t3-backend/probe-go", provider: "t3-backend" }],
+    });
+    expect(models.map(({ slug, name, subProvider }) => ({ slug, name, subProvider }))).toEqual([
+      { slug: "t3-backend/t3-backend/probe-go", name: "probe-go", subProvider: undefined },
+    ]);
   });
 });

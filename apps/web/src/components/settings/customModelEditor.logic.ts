@@ -98,10 +98,7 @@ export const DESCRIPTOR_PRESETS_BY_KIND: Partial<
       id: "agent",
       label: "Agent",
       type: "select",
-      choices: [
-        { id: "build", label: "Build", isDefault: true },
-        { id: "plan", label: "Plan" },
-      ],
+      choices: [{ id: "build", label: "Build", isDefault: true }],
     },
   ],
 };

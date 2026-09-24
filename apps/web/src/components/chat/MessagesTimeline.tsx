@@ -151,7 +151,6 @@ import {
   SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
   SnapShotAttachmentDetails,
 } from "./SnapShotAttachmentDetails";
-import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import {
   CHAT_TIMELINE_ANCHOR_OFFSET,
@@ -1471,7 +1470,6 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "assistant-meta" ? <AssistantMetaTimelineRow row={row} /> : null}
-      {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
       {row.kind === "thinking" ? <ThinkingTimelineRow /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
@@ -2211,26 +2209,6 @@ function AssistantCopyButton({
   }
 
   return <MessageCopyButton text={assistantCopyState.text ?? ""} variant="ghost" />;
-}
-
-function ProposedPlanTimelineRow({
-  row,
-}: {
-  row: Extract<TimelineRow, { kind: "proposed-plan" }>;
-}) {
-  const ctx = use(TimelineRowCtx);
-
-  return (
-    <div className="min-w-0 px-1 py-0.5">
-      <ProposedPlanCard
-        planMarkdown={row.proposedPlan.planMarkdown}
-        environmentId={ctx.activeThreadEnvironmentId}
-        threadRef={ctx.threadRef ?? undefined}
-        cwd={ctx.markdownCwd}
-        workspaceRoot={ctx.workspaceRoot}
-      />
-    </div>
-  );
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {

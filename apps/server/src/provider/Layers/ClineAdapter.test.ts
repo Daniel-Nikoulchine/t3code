@@ -28,7 +28,6 @@ import {
 import { ServerConfig } from "../../config.ts";
 import {
   makeClineAdapter,
-  resolveClineInteractionMode,
   selectClineAutoApprovedPermissionOption,
   selectClinePermissionOptionId,
 } from "./ClineAdapter.ts";
@@ -46,13 +45,6 @@ const permissionRequest = {
 } satisfies EffectAcpSchema.RequestPermissionRequest;
 
 describe("Cline adapter policy mapping", () => {
-  it("maps T3 interaction modes onto Cline plan/act", () => {
-    expect(resolveClineInteractionMode("plan")).toBe("plan");
-    expect(resolveClineInteractionMode("default")).toBe("act");
-    expect(resolveClineInteractionMode(undefined)).toBeUndefined();
-    expect(resolveClineInteractionMode(null)).toBeUndefined();
-  });
-
   it("uses exact Cline option ids and avoids permanent auto-approval", () => {
     expect(selectClinePermissionOptionId(permissionRequest, "accept")).toBe("allow_once");
     expect(selectClinePermissionOptionId(permissionRequest, "acceptForSession")).toBe(
@@ -188,7 +180,7 @@ effectIt.layer(clineAdapterTestLayer)("ClineAdapterLive", (it) => {
     }),
   );
 
-  it.effect("applies the plan interaction mode through setMode", () =>
+  it.effect("always applies act mode through setMode", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("cline-plan-mode");
       const tempDir = yield* Effect.promise(() =>
@@ -207,7 +199,7 @@ effectIt.layer(clineAdapterTestLayer)("ClineAdapterLive", (it) => {
         runtimeMode: "approval-required",
         modelSelection: { instanceId: ProviderInstanceId.make("cline"), model: "default" },
       });
-      yield* adapter.sendTurn({ threadId, input: "Explore only", interactionMode: "plan" });
+      yield* adapter.sendTurn({ threadId, input: "Explore only" });
       yield* adapter.stopSession(threadId);
 
       const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
@@ -218,7 +210,7 @@ effectIt.layer(clineAdapterTestLayer)("ClineAdapterLive", (it) => {
       );
       assert.deepEqual(
         modeWrites.map((write) => (write.params as { value?: unknown }).value),
-        ["plan"],
+        ["act"],
       );
     }),
   );

@@ -37,6 +37,7 @@ import {
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderWorkspaceMissingError,
+  toUserFacingFailureDetail,
 } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
@@ -376,7 +377,9 @@ const make = Effect.gen(function* () {
     if (isProviderWorkspaceMissingError(failReason?.error)) {
       return failReason.error.message;
     }
-    return Cause.pretty(cause);
+    // Anything else (notably defects) must stay readable: Cause.pretty
+    // embeds server-internal stack traces that are unactionable in the UI.
+    return toUserFacingFailureDetail(cause);
   };
 
   const setThreadSession = (input: {
@@ -819,7 +822,6 @@ const make = Effect.gen(function* () {
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
-    readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
@@ -873,7 +875,6 @@ const make = Effect.gen(function* () {
       // Read-only passthrough: the thread's combo travels with the turn so a
       // later fallback step can evaluate it. No fallback logic here (10b).
       ...(thread.combo != null ? { combo: thread.combo } : {}),
-      ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
     };
   });
 
@@ -1480,7 +1481,6 @@ const make = Effect.gen(function* () {
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),
-      interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),

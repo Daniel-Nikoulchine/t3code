@@ -13,7 +13,6 @@ import {
   ModelSelection,
   NonNegativeInt,
   ProjectId,
-  ProviderInteractionMode,
   RuntimeMode,
   ThreadLinkedPullRequest,
   ThreadTitleState,
@@ -36,7 +35,6 @@ export const ProjectionThread = Schema.Struct({
   // Ordered turn-level fallback targets. Absent on pre-combo rows; null clears.
   combo: Schema.optional(Schema.NullOr(FallbackCombo)),
   runtimeMode: RuntimeMode,
-  interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
@@ -58,7 +56,6 @@ export const ProjectionThread = Schema.Struct({
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
-  hasActionableProposedPlan: NonNegativeInt,
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

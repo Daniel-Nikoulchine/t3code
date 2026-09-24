@@ -21,7 +21,12 @@
  *
  * @module provider/Drivers/CodexDriver
  */
-import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
+import {
+  CodexSettings,
+  ProviderDriverKind,
+  type ServerProvider,
+  type ServerProviderModel,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -36,6 +41,7 @@ import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { makeCliLoginAuthController, codexLoginRecipe } from "../cliLoginAuth.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import {
   CODEX_RESET_CREDIT_TIMEOUT,
@@ -53,14 +59,12 @@ import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { resolveModelBackendEnvironment } from "../ModelBackendEnvironment.ts";
+import { resolveHarnessBaseEnv, resolveHarnessProcessEnv } from "../harnessMaterial.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  makeCachedProviderMaintenanceResolution,
   makePackageManagedProviderMaintenanceResolver,
   normalizeCommandPath,
-  resolveProviderMaintenanceCapabilitiesEffect,
+  resolveDriverMaintenance,
 } from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -77,6 +81,32 @@ import {
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
+
+/**
+ * Hybrid serving: a Codex instance wired to an API connection that declares
+ * its models serves two worlds — the declared slugs through the shadow home
+ * (the endpoint), everything else through its own login in the shared home.
+ * `markConnectionModels` stamps the connection-served rows so the adapter
+ * can pick the home per session and the UI can badge them; user-authored
+ * custom models are left alone and follow the own login.
+ */
+export function connectionModelSlugs(backendModels: ReadonlyArray<string>): ReadonlySet<string> {
+  return new Set(backendModels.map((slug) => slug.trim()).filter((slug) => slug.length > 0));
+}
+
+export function markConnectionModels(
+  models: ReadonlyArray<ServerProviderModel>,
+  slugs: ReadonlySet<string>,
+): Array<ServerProviderModel> {
+  if (slugs.size === 0) return [...models];
+  let changed = false;
+  const next = models.map((model) => {
+    if (model.viaConnection === true || !slugs.has(model.slug)) return model;
+    changed = true;
+    return { ...model, viaConnection: true as const };
+  });
+  return changed ? next : [...models];
+}
 // The standalone installer lays out `<CODEX_HOME>/packages/standalone/…`;
 // CODEX_HOME is not always `~/.codex`.
 function isCodexStandaloneCommandPath(commandPath: string): boolean {
@@ -127,7 +157,16 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   },
   configSchema: CodexSettings,
   defaultConfig: (): CodexSettings => decodeCodexSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config, backend }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    backend,
+    nativeFallback,
+  }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const resetCreditCoordinator = yield* CodexResetCreditCoordinator;
@@ -137,10 +176,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
-      const processEnv = {
-        ...mergeProviderInstanceEnvironment(environment),
-        ...resolveModelBackendEnvironment(backend, process.env),
-      };
+      const processEnv = resolveHarnessProcessEnv({
+        environment,
+        backend,
+        baseEnv: process.env,
+      }).processEnv;
       const homeLayout = yield* resolveCodexHomeLayout(config);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
       const stampIdentity = withInstanceIdentity({
@@ -149,7 +189,8 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
-        ...(backend === undefined ? {} : { backend }),
+        backend,
+        nativeFallback,
       });
       const backendWiresProvider = codexBackendWiresProvider(backend);
       yield* materializeCodexShadowHome(homeLayout, {
@@ -182,6 +223,23 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Connection models ride the custom-model path: appendCustomCodexModels
       // appends them to the probed `model/list` results as isCustom entries.
       const backendModels = backendWiresProvider ? (backend?.models ?? []) : [];
+      // Hybrid serving needs named connection models plus a shadow home to
+      // serve them from; otherwise the instance stays fully wired (legacy).
+      // Background text generation below keeps the wired home regardless —
+      // per-model homes there are a follow-up, turns are covered first.
+      const hybridSlugs = connectionModelSlugs(backendModels);
+      const hybridNativeHomePath = homeLayout.sharedHomePath;
+      // Own-login env without the model-backend overlay (sign-in and native
+      // hybrid sessions always talk to the real vendor, never to a proxy).
+      const nativeEnv = { ...resolveHarnessBaseEnv(environment, process.env) };
+      const hybridActive =
+        hybridSlugs.size > 0 &&
+        homeLayout.effectiveHomePath !== undefined &&
+        homeLayout.effectiveHomePath !== hybridNativeHomePath;
+      const markHybridModels = (draft: ServerProvider): ServerProvider =>
+        hybridActive
+          ? { ...draft, models: markConnectionModels(draft.models, hybridSlugs) }
+          : draft;
       const effectiveConfig = {
         ...config,
         enabled,
@@ -191,19 +249,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           ? { customModels: [...config.customModels, ...backendModels] }
           : {}),
       } satisfies CodexSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(
-          makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
-          {
-            binaryPath: effectiveConfig.binaryPath,
-            env: processEnv,
-          },
-        ).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, pathService),
-        ),
-      );
+      const resolveMaintenance = yield* resolveDriverMaintenance({
+        resolver: makeCodexMaintenanceResolver(homeLayout.sharedHomePath),
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
+      });
 
       // `makeCodexAdapter` and `makeCodexTextGeneration` have `never` error
       // channels at construction time — their failure modes are all on the
@@ -215,6 +265,16 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         instanceId,
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
+        ...(hybridActive
+          ? {
+              hybridBackend: {
+                nativeHomePath: hybridNativeHomePath,
+                nativeEnvironment: nativeEnv,
+                isConnectionModel: (model: string | undefined) =>
+                  model !== undefined && hybridSlugs.has(model),
+              },
+            }
+          : {}),
       });
 
       // Build a managed snapshot whose settings never change — mutations come
@@ -248,8 +308,8 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             modelManifest.current,
             (draft, manifest) =>
               stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
-          ),
-        checkProvider,
+          ).pipe(Effect.map(markHybridModels)),
+        checkProvider: checkProvider.pipe(Effect.map(markHybridModels)),
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
           resolveMaintenance().pipe(
             Effect.flatMap((maintenanceCapabilities) =>
@@ -379,6 +439,14 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         consumeResetCredit,
         adapter,
         textGeneration,
+        auth: yield* makeCliLoginAuthController({
+          instanceId,
+          recipe: codexLoginRecipe,
+          command: effectiveConfig.binaryPath || codexLoginRecipe.defaultCommand,
+          // Sign-in always talks to the real vendor: the model-backend
+          // overlay in `processEnv` must not reroute the login itself.
+          env: nativeEnv,
+        }),
       } satisfies ProviderInstance;
     }),
 };

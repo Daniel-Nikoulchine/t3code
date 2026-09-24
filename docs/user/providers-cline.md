@@ -26,8 +26,7 @@ plan-mode turns explore without modifying files.
 ## Permissions and active turns
 
 Every file edit and command goes through T3 Code's permission UI unless the thread runs in Full
-access, which starts Cline with auto-approval enabled. Automatic approval prefers the
-session-scoped choice and never silently creates a permanent grant.
+access, which starts Cline with auto-approval enabled (see [Permissions](./providers.md#permissions)).
 
 Cline skills discovered below `.cline/skills` (project-local) and `~/.cline/skills` (user-global)
 appear in the `$` picker; typing `$name` in the composer resolves to Cline's native `/name` form.

@@ -2,7 +2,17 @@
 
 Pi support is available as an Early Access provider. T3 Code drives the Pi
 coding agent through its RPC interface and uses Pi's existing providers,
-models, credentials, tools, skills, and session history.
+models, credentials, tools, skills, and session history — unless the
+instance runs on a shared API connection (see below).
+
+## Shared API connection
+
+A Pi instance can run on a shared API connection instead of its own
+login: pick a connection under **Connection** on the Pi harness card.
+T3 Code registers a `t3-backend` provider inside Pi and lists the
+connection's models as `t3-backend/<model>`, so those need no `pi`
+`/login`. Pi's own models keep using its own login, and removing the
+connection returns the instance to it.
 
 ## Set up Pi
 

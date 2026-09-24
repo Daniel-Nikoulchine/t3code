@@ -424,7 +424,6 @@ function deriveWorkLogEntries(
     if (activity.kind === "context-window.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isNoContentRuntimeWarning(activity)) continue;
-    if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
     entries.push(toDerivedWorkLogEntry(activity));
   }
@@ -440,18 +439,6 @@ function isNoContentRuntimeWarning(activity: OrchestrationThreadActivity): boole
     activity.kind === "runtime.warning" &&
     activity.summary.endsWith("(no displayable text content)")
   );
-}
-
-function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
-  if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") {
-    return false;
-  }
-
-  const payload =
-    activity.payload && typeof activity.payload === "object"
-      ? (activity.payload as Record<string, unknown>)
-      : null;
-  return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
 }
 
 const decodeQuestionAttachmentAnswer = Schema.decodeUnknownOption(UserInputAttachmentAnswerPayload);

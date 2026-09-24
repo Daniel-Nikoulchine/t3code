@@ -1,7 +1,6 @@
 import {
   type ClineSettings,
   type ModelCapabilities,
-  type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -13,7 +12,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
-import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -26,10 +24,7 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "../providerMaintenance.ts";
+import { makeEnrichSnapshot } from "../providerMaintenance.ts";
 import {
   CLINE_DEFAULT_MODEL_SLUG,
   makeClineAcpRuntime,
@@ -40,9 +35,44 @@ import { sessionModelStateFromInitialize } from "../acp/AcpRuntimeModel.ts";
 const CLINE_PRESENTATION = {
   displayName: "Cline",
   badgeLabel: "Early Access",
-  showInteractionModeToggle: true,
   requiresNewThreadForModelChange: false,
 } as const;
+
+/**
+ * Cline's spawn-time thinking levels (`cline --help`, verified against
+ * cline 3.0.62: none|low|medium|high|xhigh; bare `--thinking` means medium).
+ * ACP exposes no config option for it (every `*effort*`/`thinking*` id
+ * answers "Unknown config option"), so the level rides process spawn, not
+ * a per-turn write — but the picker still offers one Reasoning chip per
+ * model, same descriptor id as every other harness.
+ */
+export const CLINE_THINKING_LEVELS: ReadonlyArray<{ value: string; name: string }> = [
+  { value: "none", name: "Off" },
+  { value: "low", name: "Low" },
+  { value: "medium", name: "Medium" },
+  { value: "high", name: "High" },
+  { value: "xhigh", name: "Extra High" },
+];
+
+export function buildClineThinkingCapabilities(current?: string): ModelCapabilities {
+  const def =
+    current && CLINE_THINKING_LEVELS.some((level) => level.value === current) ? current : "medium";
+  return createModelCapabilities({
+    optionDescriptors: [
+      {
+        id: "reasoningEffort",
+        label: "Reasoning",
+        type: "select",
+        options: CLINE_THINKING_LEVELS.map((level) =>
+          level.value === def
+            ? { id: level.value, label: level.name, isDefault: true }
+            : { id: level.value, label: level.name },
+        ),
+        currentValue: def,
+      },
+    ],
+  });
+}
 
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -59,7 +89,7 @@ const CLINE_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
     name: "Cline Default",
     isCustom: false,
     isDefault: true,
-    capabilities: EMPTY_CAPABILITIES,
+    capabilities: buildClineThinkingCapabilities(),
   },
 ];
 
@@ -107,6 +137,25 @@ const CLINE_FREE_MODELS: ReadonlyArray<{ slug: string; name: string }> = [
 ];
 
 /**
+ * Cline catalog slugs are `vendor/model[:free]`. The vendor prefix is the
+ * upstream provider the picker shows as the subtitle. `cline-free` is
+ * Cline's own routing bucket (like T3's `t3-backend`) and never a
+ * provider label.
+ */
+function clineSubProvider(slug: string): string | undefined {
+  const separator = slug.indexOf("/");
+  if (separator <= 0) return undefined;
+  const vendor = slug.slice(0, separator);
+  return vendor === "cline-free" ? undefined : vendor;
+}
+
+/** Model name without the `vendor/` prefix, for slug-fallbacks next to a subProvider. */
+function clineBareSlugName(slug: string): string {
+  const separator = slug.indexOf("/");
+  return separator > 0 ? slug.slice(separator + 1) : slug;
+}
+
+/**
  * Append free models missing from the given list. Slugs already present
  * (ACP-advertised with their own name and default flag) are left alone,
  * so this never duplicates what the CLI reports.
@@ -119,11 +168,13 @@ export function withClineFreeModels(
   for (const free of CLINE_FREE_MODELS) {
     if (!seen.has(free.slug)) {
       seen.add(free.slug);
+      const subProvider = clineSubProvider(free.slug);
       missing.push({
         slug: free.slug,
         name: free.name,
+        ...(subProvider ? { subProvider } : {}),
         isCustom: false,
-        capabilities: EMPTY_CAPABILITIES,
+        capabilities: buildClineThinkingCapabilities(),
       });
     }
   }
@@ -197,7 +248,7 @@ export function clineModelsFromSettings(
   builtInModels: ReadonlyArray<ServerProviderModel> = CLINE_BUILT_IN_MODELS,
 ): ReadonlyArray<ServerProviderModel> {
   return withClineFreeModels(
-    providerModelsFromSettings(builtInModels, customModels ?? [], EMPTY_CAPABILITIES),
+    providerModelsFromSettings(builtInModels, customModels ?? [], buildClineThinkingCapabilities()),
   );
 }
 
@@ -216,14 +267,16 @@ export function buildClineDiscoveredModelsFromSessionModelState(
       return [];
     }
     seen.add(slug);
-    const name = model.name.trim() || slug;
+    const subProvider = clineSubProvider(slug);
+    const name = model.name.trim() || (subProvider ? clineBareSlugName(slug) : slug);
     return [
       {
         slug,
         name,
+        ...(subProvider ? { subProvider } : {}),
         isCustom: false,
         ...(model.modelId.trim() === modelState.currentModelId.trim() ? { isDefault: true } : {}),
-        capabilities: EMPTY_CAPABILITIES,
+        capabilities: buildClineThinkingCapabilities(),
       },
     ];
   });
@@ -472,25 +525,4 @@ export const checkClineProviderStatus = Effect.fn("checkClineProviderStatus")(fu
   });
 });
 
-export const enrichClineSnapshot = (input: {
-  readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
-  readonly enableProviderUpdateChecks?: boolean;
-  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
-  readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
-  const { snapshot, publishSnapshot } = input;
-
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
-    enableProviderUpdateChecks: input.enableProviderUpdateChecks,
-  }).pipe(
-    Effect.provideService(HttpClient.HttpClient, input.httpClient),
-    Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Cline version advisory enrichment failed", {
-        errorTag: causeErrorTag(cause),
-      }),
-    ),
-    Effect.asVoid,
-  );
-};
+export const enrichClineSnapshot = makeEnrichSnapshot("Cline");

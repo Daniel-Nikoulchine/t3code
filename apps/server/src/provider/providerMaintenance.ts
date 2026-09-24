@@ -587,6 +587,34 @@ export const makeCachedProviderMaintenanceResolution = Effect.fn(
     options?.fresh ? invalidate.pipe(Effect.andThen(cached)) : cached;
 });
 
+/**
+ * Driver assembly helper: the cached maintenance resolution every driver
+ * builds from its update resolver, binary path, and spawn env. Thirteen
+ * drivers repeated this block verbatim (resolver + binary + env in,
+ * provided spawner/filesystem/path around); the only per-driver input is
+ * the resolver. Required services flow through R like before — drivers
+ * already declare all three.
+ */
+export const resolveDriverMaintenance = Effect.fn("resolveDriverMaintenance")(function* (input: {
+  readonly resolver: ProviderMaintenanceCapabilitiesResolver;
+  readonly binaryPath: string;
+  readonly env: NodeJS.ProcessEnv;
+}) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* makeCachedProviderMaintenanceResolution(
+    resolveProviderMaintenanceCapabilitiesEffect(input.resolver, {
+      binaryPath: input.binaryPath,
+      env: input.env,
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    ),
+  );
+});
+
 function deriveVersionAdvisory(input: {
   readonly currentVersion: string | null;
   readonly latestVersion: string | null;
@@ -721,3 +749,38 @@ export const enrichProviderSnapshotWithVersionAdvisory = Effect.fn(
     }),
   };
 });
+
+export interface EnrichSnapshotInput {
+  readonly snapshot: ServerProvider;
+  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
+  readonly enableProviderUpdateChecks?: boolean;
+  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
+  readonly httpClient: HttpClient.HttpClient;
+}
+
+/**
+ * Shared version-advisory enrichment every provider snapshot repeats:
+ * resolve the advisory, publish it, and swallow failures as a warning so
+ * one failing version check never breaks the snapshot stream. The only
+ * per-provider input is the log label — thirteen `enrich*Snapshot`
+ * copies collapsed into this factory. Cursor keeps its own (extra
+ * settings/stampIdentity inputs and an unauthenticated early return).
+ */
+export const makeEnrichSnapshot =
+  (providerLabel: string) =>
+  (input: EnrichSnapshotInput): Effect.Effect<void> => {
+    const { snapshot, publishSnapshot } = input;
+
+    return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
+      enableProviderUpdateChecks: input.enableProviderUpdateChecks,
+    }).pipe(
+      Effect.provideService(HttpClient.HttpClient, input.httpClient),
+      Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
+      Effect.catchCause((cause) =>
+        Effect.logWarning(`${providerLabel} version advisory enrichment failed`, {
+          errorTag: causeErrorTag(cause),
+        }),
+      ),
+      Effect.asVoid,
+    );
+  };

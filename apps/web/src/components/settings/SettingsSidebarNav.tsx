@@ -20,6 +20,7 @@ import {
   Link2Icon,
   PaletteIcon,
   SearchIcon,
+  ServerIcon,
   Settings2Icon,
   XIcon,
 } from "lucide-react";
@@ -80,8 +81,10 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/projects": PanelsTopLeftIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": SnapShotIcon,
-  // BotIcon (the old Harness entry) retired with the merged Providers tab.
-  "/settings/providers": BotIcon,
+  // BotIcon is the Harness entry again; Providers moved to ServerIcon since
+  // it now owns the backend connections.
+  "/settings/providers": ServerIcon,
+  "/settings/harness": BotIcon,
   "/settings/integrations": BlocksIcon,
   "/settings/source-control": GitBranchIcon,
   "/settings/connections": Link2Icon,

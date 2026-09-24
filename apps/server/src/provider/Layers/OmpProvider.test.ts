@@ -44,7 +44,9 @@ describe("OmpProvider mappings", () => {
     expect(models[0]?.isDefault).toBe(true);
     expect(models[1]?.isDefault).toBeUndefined();
     expect(models[0]?.name).toBe("Opus");
-    expect(models[1]?.name).toBe("anthropic/mini");
+    expect(models[0]?.subProvider).toBe("anthropic");
+    expect(models[1]?.name).toBe("mini");
+    expect(models[1]?.subProvider).toBe("anthropic");
 
     const commands = parseCommandDescriptors({
       commands: [
@@ -62,6 +64,32 @@ describe("OmpProvider mappings", () => {
     expect(
       ompModelsFromSettings([{ slug: "custom-1", name: "custom" }]).map((model) => model.slug),
     ).toContain("custom-1");
+  });
+
+  it("never surfaces the t3-backend harness bucket as subProvider", () => {
+    const models = ompModelsFromCatalog(
+      [
+        { id: "opencode-go/gpt-5.6-luna", provider: "t3-backend", name: "GPT 5.6 Luna" },
+        { id: "claude-opus-4.7", provider: "t3-backend" },
+        { id: "local-model" },
+      ],
+      undefined,
+    );
+    expect(models.map((model) => [model.slug, model.subProvider ?? null, model.name])).toEqual([
+      ["t3-backend/opencode-go/gpt-5.6-luna", "opencode-go", "GPT 5.6 Luna"],
+      ["t3-backend/claude-opus-4.7", null, "claude-opus-4.7"],
+      ["local-model", null, "local-model"],
+    ]);
+  });
+
+  it("degrades a stale bucket-prefixed catalog id to the bare model", () => {
+    const models = ompModelsFromCatalog(
+      [{ id: "t3-backend/probe-go", provider: "t3-backend" }],
+      undefined,
+    );
+    expect(models.map((model) => [model.slug, model.subProvider ?? null, model.name])).toEqual([
+      ["t3-backend/t3-backend/probe-go", null, "probe-go"],
+    ]);
   });
 
   it.effect("builds a disabled initial snapshot", () =>
@@ -124,6 +152,10 @@ effectIt.layer(NodeServices.layer)("OmpProviderLive", (it) => {
       expect(snapshot.models.map((model) => model.slug)).toEqual([
         "test-provider/test-model",
         "test-provider/test-model-mini",
+      ]);
+      expect(snapshot.models.map((model) => model.subProvider)).toEqual([
+        "test-provider",
+        "test-provider",
       ]);
       expect(snapshot.models[0]?.isDefault).toBe(true);
       expect(snapshot.skills?.map((skill) => skill.name)).toEqual(["brave-search"]);

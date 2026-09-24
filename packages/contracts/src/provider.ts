@@ -16,7 +16,6 @@ import {
   FallbackCombo,
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
-  ProviderInteractionMode,
   ProviderRequestKind,
   ProviderSandboxMode,
   ProviderUserInputAnswers,
@@ -82,7 +81,6 @@ export const ProviderSendTurnInput = Schema.Struct({
   // Read-only passthrough of the thread's fallback combo. No execution here:
   // fallback evaluation happens server-side (turn boundary), never in adapters.
   combo: Schema.optional(Schema.NullOr(FallbackCombo)),
-  interactionMode: Schema.optional(ProviderInteractionMode),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 

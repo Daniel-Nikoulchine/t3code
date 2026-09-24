@@ -1,7 +1,6 @@
 import {
   type KiloSettings,
   type ModelCapabilities,
-  type ServerProvider,
   type ServerProviderAuth,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
@@ -15,7 +14,6 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -29,16 +27,13 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
-import {
-  enrichProviderSnapshotWithVersionAdvisory,
-  type ProviderMaintenanceCapabilities,
-} from "../providerMaintenance.ts";
+import { isBackendBucketProviderId, stripBackendBucketPrefix } from "../ModelBackendEnvironment.ts";
+import { makeEnrichSnapshot } from "../providerMaintenance.ts";
 import { deleteKiloSession, makeKiloAcpRuntime } from "../acp/KiloAcpSupport.ts";
 
 const KILO_PRESENTATION = {
   displayName: "Kilo",
   badgeLabel: "Early Access",
-  showInteractionModeToggle: false,
   requiresNewThreadForModelChange: false,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -150,8 +145,17 @@ export function parseKiloModelsCliOutput(output: string): ReadonlyArray<ServerPr
       continue;
     }
     const providerId = line.slice(0, separatorIndex).trim();
-    const modelId = line.slice(separatorIndex + 1).trim();
-    if (!/^[a-z0-9][a-z0-9_-]*$/i.test(providerId) || !modelId || modelId.includes(" ")) {
+    const rawModelId = line.slice(separatorIndex + 1).trim();
+    if (!/^[a-z0-9][a-z0-9_-]*$/i.test(providerId) || !rawModelId || rawModelId.includes(" ")) {
+      continue;
+    }
+    // A stale bucket segment in the model id (prefixed slug copied into the
+    // connection's model list) must not turn the bucket into its own
+    // subtitle — strip it before deriving the upstream below.
+    const modelId = isBackendBucketProviderId(providerId)
+      ? stripBackendBucketPrefix(rawModelId)
+      : rawModelId;
+    if (!modelId) {
       continue;
     }
     const slug = `${providerId}/${modelId}`;
@@ -166,11 +170,20 @@ export function parseKiloModelsCliOutput(output: string): ReadonlyArray<ServerPr
     const upstream = modelId.includes("/") ? modelId.slice(0, modelId.indexOf("/")) : undefined;
     const bareName = modelId.includes("/") ? modelId.slice(modelId.indexOf("/") + 1) : modelId;
     const name = bareName.startsWith("~") ? bareName.slice(1) : bareName;
+    // `t3-backend` is T3's harness bucket in the injected Kilo config, not a
+    // model provider — never surface it. With an upstream path the upstream
+    // is the subtitle; bare backend models fall back to the instance name.
+    let subProvider: string | undefined;
+    if (isBackendBucketProviderId(providerId)) {
+      subProvider = upstream?.replace(/^~/, "");
+    } else {
+      subProvider = upstream ? `${providerId}/${upstream.replace(/^~/, "")}` : providerId;
+    }
     models.push({
       slug,
       name,
       isCustom: false,
-      subProvider: upstream ? `${providerId}/${upstream.replace(/^~/, "")}` : providerId,
+      ...(subProvider ? { subProvider } : {}),
       capabilities: EMPTY_CAPABILITIES,
     });
   }
@@ -497,25 +510,4 @@ export const checkKiloProviderStatus = Effect.fn("checkKiloProviderStatus")(func
   });
 });
 
-export const enrichKiloSnapshot = (input: {
-  readonly snapshot: ServerProvider;
-  readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
-  readonly enableProviderUpdateChecks?: boolean;
-  readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
-  readonly httpClient: HttpClient.HttpClient;
-}): Effect.Effect<void> => {
-  const { snapshot, publishSnapshot } = input;
-
-  return enrichProviderSnapshotWithVersionAdvisory(snapshot, input.maintenanceCapabilities, {
-    enableProviderUpdateChecks: input.enableProviderUpdateChecks,
-  }).pipe(
-    Effect.provideService(HttpClient.HttpClient, input.httpClient),
-    Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-    Effect.catchCause((cause) =>
-      Effect.logWarning("Kilo version advisory enrichment failed", {
-        errorTag: causeErrorTag(cause),
-      }),
-    ),
-    Effect.asVoid,
-  );
-};
+export const enrichKiloSnapshot = makeEnrichSnapshot("Kilo");

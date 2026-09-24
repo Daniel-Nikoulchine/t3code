@@ -41,7 +41,6 @@ const makeThread = (
   id: ThreadId.make(id),
   archivedAt,
   deletedAt,
-  interactionMode: "default" as const,
   session: {
     threadId: ThreadId.make(id),
     status,
@@ -304,11 +303,10 @@ it.effect.each(
           String(left.threadId).localeCompare(String(right.threadId)),
         ),
         [
-          { threadId: codex.id, continuation: true, interactionMode: "default" },
+          { threadId: codex.id, continuation: true },
           {
             threadId: fallback.id,
             input: "Continue where you left off.",
-            interactionMode: "default",
           },
         ],
       );
@@ -905,9 +903,7 @@ for (const preparedStatus of [
         preparedStatus === "ready with failed scan" ? "ready" : preparedStatus;
       yield* runReconciliation(input);
       yield* Deferred.await(cleared);
-      assert.deepStrictEqual(sends, [
-        { threadId: thread.id, continuation: true, interactionMode: "default" },
-      ]);
+      assert.deepStrictEqual(sends, [{ threadId: thread.id, continuation: true }]);
       assert.deepStrictEqual(binding.runtimePayload, {
         activeTurnId: null,
         continueAfterServerUpdate: null,

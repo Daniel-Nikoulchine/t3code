@@ -166,7 +166,6 @@ describe("pendingThreadCreationShell", () => {
       title: "Fix the flaky login test",
       modelSelection: creation.modelSelection,
       runtimeMode: "full-access",
-      interactionMode: "default",
       branch: "main",
       worktreePath: null,
       latestTurn: null,

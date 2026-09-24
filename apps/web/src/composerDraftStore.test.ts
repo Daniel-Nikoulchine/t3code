@@ -1274,7 +1274,6 @@ describe("composerDraftStore project draft thread mapping", () => {
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
       runtimeMode: "full-access",
-      interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
@@ -1285,7 +1284,6 @@ describe("composerDraftStore project draft thread mapping", () => {
       worktreePath: "/tmp/worktree-test",
       envMode: "worktree",
       runtimeMode: "full-access",
-      interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
   });
@@ -1313,7 +1311,6 @@ describe("composerDraftStore project draft thread mapping", () => {
       envMode: "worktree",
       startFromOrigin: true,
       runtimeMode: "approval-required",
-      interactionMode: "plan",
     });
     store.setPrompt(draftId, "keep this prompt");
     markPromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
@@ -1331,7 +1328,6 @@ describe("composerDraftStore project draft thread mapping", () => {
       envMode: "worktree",
       startFromOrigin: true,
       runtimeMode: "approval-required",
-      interactionMode: "plan",
       promotedTo: null,
     });
     expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
@@ -2445,7 +2441,6 @@ describe("composerDraftStore model seed migration", () => {
     logicalProjectKey,
     createdAt: "2026-08-01T00:00:00.000Z",
     runtimeMode: "full-access",
-    interactionMode: "default",
     branch: null,
     worktreePath: null,
     envMode: "local",
@@ -2725,21 +2720,11 @@ describe("composerDraftStore runtime and interaction settings", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.runtimeMode).toBe("approval-required");
   });
 
-  it("stores interaction mode overrides in the composer draft", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.setInteractionMode(threadRef, "plan");
-
-    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.interactionMode).toBe("plan");
-  });
-
   it("removes empty settings-only drafts when overrides are cleared", () => {
     const store = useComposerDraftStore.getState();
 
     store.setRuntimeMode(threadRef, "approval-required");
-    store.setInteractionMode(threadRef, "plan");
     store.setRuntimeMode(threadRef, null);
-    store.setInteractionMode(threadRef, null);
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
   });

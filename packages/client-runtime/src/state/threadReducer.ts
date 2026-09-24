@@ -45,11 +45,6 @@ function withPullRequests(
   };
 }
 
-const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]>(
-  O.mapInput(O.String, (p) => p.createdAt),
-  O.mapInput(O.String, (p) => p.id),
-);
-
 const checkpointOrder = O.mapInput(
   O.Number,
   (cp: OrchestrationThread["checkpoints"][number]) =>
@@ -119,7 +114,6 @@ export function applyThreadDetailEvent(
           title: event.payload.title,
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
-          interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           branchPullRequest: null,
@@ -136,7 +130,6 @@ export function applyThreadDetailEvent(
           deletedAt: null,
           pullRequests: [],
           messages: [],
-          proposedPlans: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -326,16 +319,6 @@ export function applyThreadDetailEvent(
         },
       };
 
-    case "thread.interaction-mode-set":
-      return {
-        kind: "updated",
-        thread: {
-          ...thread,
-          interactionMode: event.payload.interactionMode,
-          updatedAt: event.payload.updatedAt,
-        },
-      };
-
     // ── Turn lifecycle ──────────────────────────────────────────────
     case "thread.turn-start-requested":
       return {
@@ -346,7 +329,6 @@ export function applyThreadDetailEvent(
             ? { modelSelection: event.payload.modelSelection }
             : {}),
           runtimeMode: event.payload.runtimeMode,
-          interactionMode: event.payload.interactionMode,
           updatedAt: event.occurredAt,
         },
       };
@@ -542,23 +524,6 @@ export function applyThreadDetailEvent(
             },
           };
 
-    // ── Proposed plans ──────────────────────────────────────────────
-    case "thread.proposed-plan-upserted": {
-      const proposedPlan = event.payload.proposedPlan;
-
-      const proposedPlans = pipe(
-        thread.proposedPlans,
-        Arr.filter((entry) => entry.id !== proposedPlan.id),
-        Arr.append(proposedPlan),
-        Arr.sort(proposedPlanOrder),
-      );
-
-      return {
-        kind: "updated",
-        thread: { ...thread, proposedPlans, updatedAt: event.occurredAt },
-      };
-    }
-
     // ── Checkpoints / turn diffs ────────────────────────────────────
     case "thread.turn-diff-completed": {
       const checkpoint: OrchestrationCheckpointSummary = {
@@ -629,10 +594,6 @@ export function applyThreadDetailEvent(
         retainedTurnIds,
         event.payload.turnCount,
       );
-      const proposedPlans = pipe(
-        thread.proposedPlans,
-        Arr.filter((plan) => plan.turnId === null || retainedTurnIds.has(plan.turnId)),
-      );
       const activities = pipe(
         thread.activities,
         Arr.filter((activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId)),
@@ -645,7 +606,6 @@ export function applyThreadDetailEvent(
           ...thread,
           checkpoints,
           messages,
-          proposedPlans,
           activities,
           latestTurn:
             latestCheckpoint === null
@@ -790,9 +750,7 @@ function reuseLatestTurn(
     previous.requestedAt === next.requestedAt &&
     previous.startedAt === next.startedAt &&
     previous.completedAt === next.completedAt &&
-    previous.assistantMessageId === next.assistantMessageId &&
-    previous.sourceProposedPlan?.threadId === next.sourceProposedPlan?.threadId &&
-    previous.sourceProposedPlan?.planId === next.sourceProposedPlan?.planId
+    previous.assistantMessageId === next.assistantMessageId
     ? previous
     : next;
 }

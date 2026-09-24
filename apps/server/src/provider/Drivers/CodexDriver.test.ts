@@ -2,7 +2,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
@@ -25,7 +25,7 @@ import {
   ProviderVersionCache,
   resolveLatestProviderVersion,
 } from "../providerMaintenance.ts";
-import { CodexDriver } from "./CodexDriver.ts";
+import { CodexDriver, connectionModelSlugs, markConnectionModels } from "./CodexDriver.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-codex-driver-maintenance-",
@@ -162,6 +162,46 @@ it.layer(testLayer)("CodexDriver", (it) => {
         const snapshot = yield* instance.snapshot.getSnapshot;
         expect(snapshot.models.map((model) => model.slug)).toContain("glm-4.6");
         expect(snapshot.models.find((model) => model.slug === "glm-4.6")?.isCustom).toBe(true);
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "emits requires_openai_auth for a Codex OAuth account backend instead of env_key",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-driver-oauth-" });
+        const sharedHome = NodePath.join(tempDir, "codex-home");
+        const shadowHome = NodePath.join(tempDir, "codex-shadow");
+        yield* fs.makeDirectory(sharedHome, { recursive: true });
+
+        yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("codex-oauth"),
+          displayName: "Codex OAuth test",
+          enabled: false,
+          // A stale host key must not leak into an OAuth-backed section.
+          environment: [{ name: "OPENAI_API_KEY", value: "sk-stale", sensitive: true }],
+          backend: {
+            kind: "openai-compatible",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            codexAccountInstanceId: "codex-oauth",
+            models: ["gpt-5.6-luna"],
+          },
+          config: {
+            ...CodexDriver.defaultConfig(),
+            binaryPath: NodePath.join(tempDir, "missing", "codex"),
+            homePath: sharedHome,
+            shadowHomePath: shadowHome,
+          },
+        });
+
+        const shadowContents = yield* fs.readFileString(NodePath.join(shadowHome, "config.toml"));
+        expect(shadowContents).toContain("requires_openai_auth = true");
+        expect(shadowContents).not.toContain("env_key");
+        expect(shadowContents).not.toContain("sk-stale");
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
         Effect.scoped,
@@ -461,4 +501,44 @@ it.layer(testLayer)("CodexDriver", (it) => {
       }).pipe(Effect.scoped),
     { skip: windowsHost },
   );
+});
+
+describe("hybrid connection model marking", () => {
+  const model = (slug: string, extra?: { isCustom?: boolean }) => ({
+    slug,
+    name: slug,
+    isCustom: extra?.isCustom ?? false,
+    capabilities: null,
+  });
+
+  it("stamps only declared connection slugs", () => {
+    expect(
+      markConnectionModels(
+        [
+          model("gpt-5.5"),
+          model("glm-5", { isCustom: true }),
+          model("kimi-k2", { isCustom: true }),
+        ],
+        connectionModelSlugs(["glm-5", "  ", "kimi-k2"]),
+      ),
+    ).toEqual([
+      model("gpt-5.5"),
+      { ...model("glm-5", { isCustom: true }), viaConnection: true },
+      { ...model("kimi-k2", { isCustom: true }), viaConnection: true },
+    ]);
+  });
+
+  it("leaves user custom models alone", () => {
+    expect(
+      markConnectionModels(
+        [model("my-alias", { isCustom: true })],
+        connectionModelSlugs(["glm-5"]),
+      ),
+    ).toEqual([model("my-alias", { isCustom: true })]);
+  });
+
+  it("marks nothing without connection slugs", () => {
+    const models = [model("gpt-5.5")];
+    expect(markConnectionModels(models, connectionModelSlugs([]))).toEqual(models);
+  });
 });

@@ -2,7 +2,6 @@ import type {
   OrchestrationCheckpointSummary,
   OrchestrationLatestTurn,
   OrchestrationMessage,
-  OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
@@ -18,7 +17,6 @@ import { parseThreadKey, threadKey } from "./entities.ts";
 
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.freeze([]);
-const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
 const EMPTY_CHECKPOINTS: ReadonlyArray<OrchestrationCheckpointSummary> = Object.freeze([]);
 
 /**
@@ -49,7 +47,6 @@ export function mergeEnvironmentThread(
     title: shell.title,
     modelSelection: shell.modelSelection,
     runtimeMode: shell.runtimeMode,
-    interactionMode: shell.interactionMode,
     branch: shell.branch,
     worktreePath: shell.worktreePath,
     latestTurn: shell.latestTurn,
@@ -127,13 +124,6 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-activities:${key}`)),
   );
 
-  const threadProposedPlansAtomFamily = Atom.family((key: string) =>
-    Atom.make(
-      (get): ReadonlyArray<OrchestrationProposedPlan> =>
-        get(threadDetailAtomFamily(key))?.proposedPlans ?? EMPTY_PROPOSED_PLANS,
-    ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-proposed-plans:${key}`)),
-  );
-
   const threadCheckpointsAtomFamily = Atom.family((key: string) =>
     Atom.make(
       (get): ReadonlyArray<OrchestrationCheckpointSummary> =>
@@ -160,7 +150,6 @@ export function createEnvironmentThreadDetailAtoms<E>(
     errorAtom: (ref: ScopedThreadRef) => threadErrorAtomFamily(threadKey(ref)),
     messagesAtom: (ref: ScopedThreadRef) => threadMessagesAtomFamily(threadKey(ref)),
     activitiesAtom: (ref: ScopedThreadRef) => threadActivitiesAtomFamily(threadKey(ref)),
-    proposedPlansAtom: (ref: ScopedThreadRef) => threadProposedPlansAtomFamily(threadKey(ref)),
     checkpointsAtom: (ref: ScopedThreadRef) => threadCheckpointsAtomFamily(threadKey(ref)),
     sessionAtom: (ref: ScopedThreadRef) => threadSessionAtomFamily(threadKey(ref)),
     latestTurnAtom: (ref: ScopedThreadRef) => threadLatestTurnAtomFamily(threadKey(ref)),

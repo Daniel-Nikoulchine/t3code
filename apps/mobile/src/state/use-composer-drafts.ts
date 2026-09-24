@@ -9,12 +9,10 @@ import {
   OrchestrationMessageContext,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProjectId as ProjectIdSchema,
-  ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
-  type ProviderInteractionMode,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -325,7 +323,6 @@ export interface ComposerDraft {
   readonly importedShareIds?: ReadonlyArray<string>;
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
-  readonly interactionMode?: ProviderInteractionMode;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
   /**
    * Set on new-task drafts only. The project is stored here rather than in
@@ -357,7 +354,7 @@ export interface ComposerDraftWorkspaceSelection {
 
 export type ComposerDraftSettingsUpdate = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection" | "project"
+  "modelSelection" | "runtimeMode" | "workspaceSelection" | "project"
 >;
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
@@ -387,7 +384,6 @@ const ComposerDraftSchema = Schema.Struct({
   importedShareIds: Schema.optional(Schema.Array(Schema.String)),
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
-  interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
   project: Schema.optional(ComposerDraftProjectSchema),
 });
@@ -542,7 +538,6 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.attachments.length === 0 &&
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
-    draft.interactionMode === undefined &&
     draft.workspaceSelection === undefined
   );
 }
@@ -619,14 +614,13 @@ export function decodePersistedComposerState(value: unknown): {
             // model-precedence fix carry a bare modelSelection with no
             // other selector settings. Strip it so the next compose pass
             // re-resolves project → sticky → provider defaults. Drafts
-            // with runtime/interaction/workspace settings or actual text /
+            // with runtime/workspace settings or actual text /
             // attachments were deliberately configured and are left alone.
             isNewTaskDraftKey(key) &&
               draft.modelSelection &&
               draft.text.length === 0 &&
               draft.attachments.length === 0 &&
               draft.runtimeMode === undefined &&
-              draft.interactionMode === undefined &&
               draft.workspaceSelection === undefined
               ? { ...draft, modelSelection: undefined }
               : draft,
@@ -1123,18 +1117,8 @@ export async function removeDeliveredCloudQueuedMessage(
       continue;
     // Upload ids may change during preparation; user edits must remain recoverable.
     if (
-      JSON.stringify([
-        archived.modelSelection,
-        archived.runtimeMode,
-        archived.interactionMode,
-        archived.creation,
-      ]) !==
-      JSON.stringify([
-        message.modelSelection,
-        message.runtimeMode,
-        message.interactionMode,
-        message.creation,
-      ])
+      JSON.stringify([archived.modelSelection, archived.runtimeMode, archived.creation]) !==
+      JSON.stringify([message.modelSelection, message.runtimeMode, message.creation])
     )
       continue;
     const editorKey = `pending-task:${message.messageId}`;
@@ -1146,8 +1130,6 @@ export async function removeDeliveredCloudQueuedMessage(
         (editor.modelSelection !== undefined &&
           JSON.stringify(editor.modelSelection) !== JSON.stringify(message.modelSelection)) ||
         (editor.runtimeMode !== undefined && editor.runtimeMode !== message.runtimeMode) ||
-        (editor.interactionMode !== undefined &&
-          editor.interactionMode !== message.interactionMode) ||
         (editor.workspaceSelection !== undefined &&
           (editor.workspaceSelection.mode !== message.creation?.workspaceMode ||
             editor.workspaceSelection.branch !== message.creation?.branch ||
@@ -1674,7 +1656,6 @@ export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): bool
     a.importedShareIds === b.importedShareIds &&
     a.modelSelection === b.modelSelection &&
     a.runtimeMode === b.runtimeMode &&
-    a.interactionMode === b.interactionMode &&
     a.workspaceSelection === b.workspaceSelection
   );
 }
@@ -1707,9 +1688,7 @@ export function undoComposerDraftMergeState(
   );
   // A setting still holding the merge's value is the merge's doing: restore
   // the snapshot's. One the user changed since the merge stays theirs.
-  const undoSetting = <
-    K extends "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection",
-  >(
+  const undoSetting = <K extends "modelSelection" | "runtimeMode" | "workspaceSelection">(
     key: K,
   ): ComposerDraft[K] => (existing[key] === merged[key] ? snapshot[key] : existing[key]);
   const text =
@@ -1727,7 +1706,7 @@ export function undoComposerDraftMergeState(
     ),
     modelSelection: undoSetting("modelSelection"),
     runtimeMode: undoSetting("runtimeMode"),
-    interactionMode: undoSetting("interactionMode"),
+
     workspaceSelection: undoSetting("workspaceSelection"),
   };
   return withComposerDraft(current, draftKey, draft);
