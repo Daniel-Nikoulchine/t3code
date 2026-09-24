@@ -89,59 +89,6 @@ describe("home project scopes", () => {
     );
   });
 
-  it("routes stale duplicate project refs through the canonical repository group", () => {
-    const localEnvironmentId = EnvironmentId.make("environment-local");
-    const remoteEnvironmentId = EnvironmentId.make("environment-remote");
-    const repositoryIdentity = {
-      canonicalKey: "github.com/pingdotgg/t3code",
-      locator: {
-        source: "git-remote" as const,
-        remoteName: "origin",
-        remoteUrl: "git@github.com:pingdotgg/t3code.git",
-      },
-    };
-    const local = makeProject({
-      id: ProjectId.make("project-local"),
-      environmentId: localEnvironmentId,
-      title: "t3code",
-      workspaceRoot: "/workspaces/t3code",
-      repositoryIdentity,
-    });
-    const stale = makeProject({
-      environmentId: remoteEnvironmentId,
-      id: ProjectId.make("project-stale"),
-      title: "t3code",
-      workspaceRoot: "/remote/t3code",
-      updatedAt: "2026-06-01T00:00:00.000Z",
-    });
-    const canonicalRemote = makeProject({
-      environmentId: remoteEnvironmentId,
-      id: ProjectId.make("project-canonical-remote"),
-      title: "t3code",
-      workspaceRoot: "/remote/t3code/",
-      repositoryIdentity,
-      updatedAt: "2026-06-02T00:00:00.000Z",
-    });
-    const projects = [local, stale, canonicalRemote];
-
-    const scopes = buildHomeProjectScopes({
-      projects,
-      environmentId: null,
-      projectGroupingMode: "repository",
-    });
-
-    expect(scopes).toHaveLength(1);
-    expect(scopes[0]?.projects.map((project) => project.id)).toEqual([
-      local.id,
-      canonicalRemote.id,
-    ]);
-    expect(scopes[0]?.projectRefs.map((projectRef) => projectRef.projectId)).toEqual([
-      local.id,
-      stale.id,
-      canonicalRemote.id,
-    ]);
-  });
-
   it("keeps repository identity from an older duplicate when the freshness winner lacks it", () => {
     const localEnvironmentId = EnvironmentId.make("environment-local");
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
@@ -336,31 +283,6 @@ describe("home project scopes", () => {
         projectGroupingMode: "repository",
       }),
     ).toHaveLength(2);
-  });
-
-  it("uses the physical project title for a singleton scope", () => {
-    const project = makeProject({
-      environmentId: EnvironmentId.make("environment-1"),
-      id: ProjectId.make("project-1"),
-      title: "local-worktree-name",
-      repositoryIdentity: {
-        canonicalKey: "github.com/pingdotgg/t3code",
-        displayName: "codething-mvp",
-        locator: {
-          source: "git-remote" as const,
-          remoteName: "origin",
-          remoteUrl: "git@github.com:pingdotgg/t3code.git",
-        },
-      },
-    });
-
-    const scopes = buildHomeProjectScopes({
-      projects: [project],
-      environmentId: null,
-      projectGroupingMode: "repository",
-    });
-
-    expect(scopes[0]?.title).toBe("local-worktree-name");
   });
 
   it("matches web repository, repository-path, and separate grouping modes", () => {

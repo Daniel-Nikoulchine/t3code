@@ -111,7 +111,6 @@ export const HarnessPicker = memo(function HarnessPicker(props: {
         render={
           <ComposerControl
             aria-label={activeEntry ? `Harness: ${activeEntry.displayName}` : "Choose harness"}
-            variant="ghost"
             size={size}
             data-chat-harness-picker="true"
             className={cn("min-w-0 shrink whitespace-nowrap", props.triggerClassName)}
@@ -151,8 +150,8 @@ export const HarnessPicker = memo(function HarnessPicker(props: {
       <PopoverPopup
         {...(props.isComposerOwned ? composerFloatingLayerProps : {})}
         align="start"
-        className="before:hidden [--viewport-inline-padding:0]"
-        viewportClassName="overflow-hidden! rounded-[calc(var(--radius-lg)-1px)] p-0 [clip-path:inset(0_round_calc(var(--radius-lg)-1px))]"
+        width="sm"
+        padding="none"
       >
         <div
           className="flex max-h-86.5 w-64 flex-col overflow-y-auto overscroll-contain p-1"

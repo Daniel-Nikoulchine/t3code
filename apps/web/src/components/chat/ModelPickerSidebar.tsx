@@ -196,7 +196,6 @@ const ROW_BASE_CLASS =
 /** Opens toward the rail so the list stays readable (not over the model names). */
 const PICKER_TOOLTIP_SIDE = "left" as const;
 const PICKER_TOOLTIP_SIDE_OFFSET = 8;
-const PICKER_TOOLTIP_CLASS = "max-w-64 text-balance font-normal leading-snug";
 
 export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
   /** `"favorites"` or an instance id from `choices`. */
@@ -266,7 +265,6 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   side={PICKER_TOOLTIP_SIDE}
                   sideOffset={PICKER_TOOLTIP_SIDE_OFFSET}
                   align="center"
-                  className={PICKER_TOOLTIP_CLASS}
                 >
                   Favorites
                 </TooltipPopup>
@@ -305,7 +303,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   displayName={choice.iconDisplayName}
                   accentColor={choice.accentColor}
                   showBadge={choice.showInstanceBadge}
-                  className="size-6 shrink-0"
+                  className="size-6 shrink-0 z-30"
                   iconClassName="size-5"
                   indicatorBackground={
                     isSelected
@@ -354,7 +352,6 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                     side={PICKER_TOOLTIP_SIDE}
                     sideOffset={PICKER_TOOLTIP_SIDE_OFFSET}
                     align="center"
-                    className={PICKER_TOOLTIP_CLASS}
                   >
                     {tooltip}
                   </TooltipPopup>

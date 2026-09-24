@@ -8,6 +8,7 @@ import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
 import * as BackendLastVerified from "../backendLastVerified.ts";
+import * as ModelManifest from "../ModelManifest.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
@@ -114,7 +115,10 @@ describe("ProviderRegistry backend verification marker", () => {
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3-backend-verified-stamp-",
-        }).pipe(Layer.provideMerge(NodeServices.layer)),
+        }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(ModelManifest.layerTest),
+        ),
       ),
     ),
   );
@@ -147,7 +151,10 @@ describe("ProviderRegistry backend verification marker", () => {
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3-backend-verified-no-tracker-",
-        }).pipe(Layer.provideMerge(NodeServices.layer)),
+        }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(ModelManifest.layerTest),
+        ),
       ),
     ),
   );

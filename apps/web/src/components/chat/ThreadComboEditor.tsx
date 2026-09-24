@@ -115,13 +115,8 @@ export const ThreadComboEditor = memo(function ThreadComboEditor(props: {
           <ComposerControlChevron size={size} />
         </span>
       </PopoverTrigger>
-      <PopoverPopup
-        {...composerFloatingLayerProps}
-        align="start"
-        className="w-72 max-w-none text-left whitespace-normal"
-        viewportClassName="p-0"
-      >
-        <div className="flex flex-col gap-2 p-[var(--floating-content-inset)]">
+      <PopoverPopup {...composerFloatingLayerProps} align="start" padding="none">
+        <div className="flex w-72 max-w-none flex-col gap-2 p-[var(--floating-content-inset)] text-left whitespace-normal">
           <div className="flex items-center gap-1">
             <Button
               type="button"

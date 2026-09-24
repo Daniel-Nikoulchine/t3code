@@ -21,6 +21,7 @@ import {
 } from "../Layers/GrokProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedDriverSnapshot } from "../makeManagedDriverSnapshot.ts";
+import { readGrokUsageLimits } from "../Layers/grokUsageLimits.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -127,9 +128,9 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
-      const serverSettings = yield* ServerSettingsService;
-      const path = yield* Path.Path;
       const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const serverSettings = yield* ServerSettingsService;
       const { cwd, baseDir } = yield* ServerConfig;
       const eventLoggers = yield* ProviderEventLoggers;
       // The backend overlay reaches the harness through a shadow GROK_HOME:
@@ -210,7 +211,17 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
       const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv);
 
       const checkProvider = checkGrokProviderStatus(effectiveConfig, processEnv, cwd).pipe(
+        Effect.flatMap((snapshot) =>
+          effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
+            ? readGrokUsageLimits(processEnv).pipe(
+                Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
+              )
+            : Effect.succeed(snapshot),
+        ),
         Effect.map(stampIdentity),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );

@@ -80,7 +80,7 @@ export function SettingsProvidersRouteScreen() {
         contentContainerClassName="gap-3 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
-        <SettingsSection title="Model providers" card>
+        <SettingsSection title="Model providers">
           {connectionBlocks.map(({ environment, connections }, index) => {
             const entries = Object.entries(connections);
             return (
@@ -126,7 +126,7 @@ export function SettingsProvidersRouteScreen() {
             </View>
           ) : null}
         </SettingsSection>
-        <SettingsSection title="Model backends" card>
+        <SettingsSection title="Model backends">
           {rows.map(({ environment, snapshot, orphan }, index) => {
             const backendLabel = resolveProviderBackendLabel(snapshot);
             const proxied = backendLabel !== undefined;
